@@ -80,4 +80,5 @@ jobs:
           gh release create "$VERSION" "$ZIP" \
             --repo "${{ github.repository }}" \
             --title "$TITLE" \
-            --generate-notes
+            --generate-notes \
+            --clobber

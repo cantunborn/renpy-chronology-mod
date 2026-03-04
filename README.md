@@ -4,9 +4,24 @@ A non-intrusive choice history tracker for RenPy visual novels. Records every de
 
 ## Installation
 
-Drop the contents of this folder into your game's `game/` directory and launch the game.
+Download the zip from the [latest release](../../releases/latest) and follow the steps for your platform.
 
-No save file editing required. Works on existing saves — the mod starts recording from the point you install it.
+### Windows
+
+1. Open your game's install folder (right-click the shortcut → *Open file location*, or find it in Steam).
+2. Right-click the zip → **Extract All**, and set the destination to the game's root folder.
+3. Windows will merge the `game/` folders automatically. If asked to replace files, choose **Replace**.
+
+### macOS
+
+The game is packaged as a `.app` bundle, so the `game/` folder is hidden inside it.
+
+1. Extract the zip — you'll get a `game/` folder.
+2. Find the game in Finder, right-click the `.app` → **Show Package Contents**.
+3. Navigate to `Contents/Resources/autorun/`.
+4. Drag the `game/` folder from the zip into the `autorun/` folder. When prompted to merge, choose **Merge**.
+
+Launch the game — no further setup needed. Works on existing saves; the mod starts recording from the point you install it.
 
 ---
 
