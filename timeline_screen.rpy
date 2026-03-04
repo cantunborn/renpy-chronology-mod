@@ -118,7 +118,7 @@ init python:
 
 init python:
     import os as _os
-    _tl_mod_abs    = _os.path.join(renpy.config.gamedir, "timeline-mod", "fonts")
+    _tl_mod_abs    = _os.path.join(renpy.config.gamedir, "renpy-chronology-mod", "fonts")
 
     default_font = None
     default_bold  = None
@@ -136,18 +136,18 @@ init python:
     if default_font:
         _tl_font_reg = default_font
     else:
-        _tl_font_reg = "timeline-mod/fonts/Inter-Regular.ttf"
+        _tl_font_reg = "renpy-chronology-mod/fonts/Inter-Regular.ttf"
 
     if default_bold:
         _tl_font_bold = default_bold
     else:
-        _tl_font_bold = "timeline-mod/fonts/Inter-Bold.ttf"
+        _tl_font_bold = "renpy-chronology-mod/fonts/Inter-Bold.ttf"
 
-    _tl_mod_abs = _os.path.join(renpy.config.gamedir, "timeline-mod", "fonts")
+    _tl_mod_abs = _os.path.join(renpy.config.gamedir, "renpy-chronology-mod", "fonts")
     if not _os.path.exists(_os.path.join(_tl_mod_abs, "Inter-Regular.ttf")):
         if _os.path.exists(_os.path.join(_tl_mod_abs, "InterVariable.ttf")):
-            _tl_font_reg  = "timeline-mod/fonts/InterVariable.ttf"
-            _tl_font_bold = "timeline-mod/fonts/InterVariable.ttf"
+            _tl_font_reg  = "renpy-chronology-mod/fonts/InterVariable.ttf"
+            _tl_font_bold = "renpy-chronology-mod/fonts/InterVariable.ttf"
         else:
             _tl_font_reg  = "DejaVuSans.ttf"
             _tl_font_bold = "DejaVuSans-Bold.ttf"

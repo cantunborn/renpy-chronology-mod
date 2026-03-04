@@ -3,7 +3,7 @@ Inter Font — Required
 Download Inter from: https://rsms.me/inter/
 License: SIL Open Font License 1.1 (free to bundle and redistribute)
 
-Place these files in this folder (game/timeline-mod/fonts/):
+Place these files in this folder (game/renpy-chronology-mod/fonts/):
   Inter-Regular.ttf
   Inter-Bold.ttf
 
