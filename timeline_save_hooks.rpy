@@ -29,7 +29,7 @@ init python:
         ## If _tl_history is missing or wrong type, reset to empty list
         history = getattr(_store, "_tl_history", None)
         if not isinstance(history, list):
-            renpy.log("TL: _tl_history invalid on load ({}), resetting".format(type(history)))
+            _tl_log("TL: _tl_history invalid on load ({}), resetting".format(type(history)))
             _store._tl_history = []
 
         ## Validate each node; drop malformed entries silently
@@ -41,7 +41,7 @@ init python:
                     and isinstance(node["options"], list)):
                 clean.append(node)
             else:
-                renpy.log("TL: dropping malformed node: {}".format(repr(node)[:80]))
+                _tl_log("TL: dropping malformed node: {}".format(repr(node)[:80]))
         _store._tl_history = clean
 
         ## Re-index nodes in case indices are stale
@@ -55,7 +55,7 @@ init python:
         _store._tl_ast_map      = {}
         _store._tl_global_new   = 0
 
-        renpy.log("TL: post-load validation complete ({} nodes)".format(
+        _tl_log("TL: post-load validation complete ({} nodes)".format(
             len(_store._tl_history)))
 
     ## Register the validator as an after_load callback

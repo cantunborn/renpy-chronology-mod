@@ -23,6 +23,17 @@ init python:
             renpy.show_screen("timeline")
 
 ## =============================================================================
+## Chronology — jump helper label
+## Called via renpy.jump() to escape screen context before loading a save.
+## =============================================================================
+
+label _tl_do_load:
+    if _tl_load_slot:
+        $ renpy.load(_tl_load_slot)
+    return
+
+
+## =============================================================================
 ## Design tokens — all colours and sizes in one place
 ## =============================================================================
 
@@ -105,12 +116,14 @@ init python:
         "footer_text"   : "#9a9183",
         "btn_bg"        : "#ffffff14",
         "btn_hover_bg"  : "#ffffff28",
+        "opt_hover_bg"  : accent_color + "30",  ## translucent accent for option row hover
         "btn_text"      : "#c8c0b4",
 
         ## Modal
         "modal_bg"      : "#1a1814ee",
         "modal_header"  : "#f0ece4",
     }
+
 
 ## =============================================================================
 ## Styles — fully explicit, no inheritance from game or mod style chains
@@ -241,6 +254,40 @@ screen timeline():
                         color TL["header_sub"]
 
                 null xfill True
+
+                if persistent._tl_recovery_slot:
+                    button:
+                        action [Function(_tl_cancel_replay), Hide("timeline"), Jump("_tl_do_load")]
+                        background None
+                        hover_background None
+                        yalign 0.5
+
+                        hbox:
+                            spacing 4
+                            yalign 0.5
+
+                            text "↺":
+                                style "tl_base"
+                                size TL_SIZE_BODY
+                                font "DejaVuSans.ttf"
+                                color TL["header_sub"]
+                                hover_color TL["accent"]
+                                yalign 0.5
+
+                            text "Back":
+                                style "tl_base"
+                                size TL_SIZE_BODY
+                                color TL["header_sub"]
+                                hover_color TL["accent"]
+                                yalign 0.5
+
+                ## DEBUG
+                textbutton "Clear Cache":
+                    action Function(_tl_clear_thumb_cache)
+                    text_color TL["header_sub"]
+                    text_hover_color TL["accent"]
+                    text_size TL_SIZE_BODY
+                    yalign 0.5
 
                 python:
                     _tl_playthrough_new = sum(
@@ -691,11 +738,12 @@ screen tl_modal(node):
                                             _tl_is_chosen = (node.get("chosen_index") == _i)
                                             _tl_show_dot  = not _tl_option_seen(node, _i) and not _tl_is_chosen
 
-                                        frame:
-                                            style "tl_frame_base"
+                                        button:
                                             xfill True
-                                            padding (0, 12, 0, 12)
+                                            padding (16, 12, 16, 12)
                                             background None
+                                            hover_background Solid(TL["opt_hover_bg"])
+                                            action [Function(_tl_begin_jump, node["index"], _i), Hide("tl_modal"), Hide("timeline"), Jump("_tl_do_load")]
 
                                             hbox:
                                                 xfill True
@@ -747,11 +795,12 @@ screen tl_modal(node):
                                         _tl_is_chosen = (node.get("chosen_index") == _i)
                                         _tl_show_dot  = not _tl_option_seen(node, _i) and not _tl_is_chosen
 
-                                    frame:
-                                        style "tl_frame_base"
+                                    button:
                                         xfill True
-                                        padding (0, 12, 0, 12)
+                                        padding (16, 12, 16, 12)
                                         background None
+                                        hover_background Solid(TL["opt_hover_bg"])
+                                        action [Function(_tl_begin_jump, node["index"], _i), Hide("tl_modal"), Hide("timeline"), Jump("_tl_do_load")]
 
                                         hbox:
                                             xfill True
@@ -890,3 +939,5 @@ screen tl_dbrow(label, value):
             style "tl_base"
             size TL_SIZE_DOT
             color "#e2e8f0"
+
+
