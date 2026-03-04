@@ -1,0 +1,58 @@
+TL AST: scanning 172306 named nodes
+TL AST done: 215 menus
+TL ERROR initial save failed: Can't pickle local object '_tl_make_seen_fn.<locals>.find_check.<locals>.<lambda>'
+TL jump: node=2 option=0
+TL jump: loading save=_ch_0001_6d0e4b
+TL replay resuming, target={'node_index': 2, 'option_index': 0}
+TL: post-load validation complete (2 nodes)
+TL replay: arrived at node=2 option=0
+TL: post-load validation complete (4 nodes)
+TL AST: scanning 189970 named nodes
+TL AST done: 293 menus
+TL ERROR initial save failed: Can't pickle <type 'function'>: attribute lookup __builtin__.function failed
+TL jump: node=3 option=0
+TL jump: loading save=_ch_0002_3a1400
+TL replay resuming, target={u'option_index': 0, u'node_index': 3}
+TL: post-load validation complete (3 nodes)
+TL replay: arrived at node=3 option=0
+TL: post-load validation complete (5 nodes)
+TL AST: scanning 172306 named nodes
+TL AST done: 215 menus
+TL ERROR initial save failed: Can't pickle local object '_tl_make_seen_fn.<locals>.find_check.<locals>.<lambda>'
+TL jump: node=2 option=0
+TL jump: loading save=_ch_0001_6d0e4b
+TL replay resuming, target={'node_index': 2, 'option_index': 0}
+TL: post-load validation complete (2 nodes)
+TL replay: arrived at node=2 option=0
+TL: post-load validation complete (3 nodes)
+TL AST: scanning 172306 named nodes
+TL AST done: 215 menus
+TL ERROR initial save failed: Can't pickle local object '_tl_make_seen_fn.<locals>.find_check.<locals>.<lambda>'
+TL jump: node=2 option=0
+TL jump: loading save=_ch_0001_6d0e4b
+TL replay resuming, target={'node_index': 2, 'option_index': 0}
+TL: post-load validation complete (2 nodes)
+TL replay: arrived at node=2 option=0
+TL AST: scanning 172306 named nodes
+TL AST done: 215 menus
+TL ERROR initial save failed: Can't pickle local object '_tl_make_seen_fn.<locals>.find_check.<locals>.<lambda>'
+TL jump: node=3 option=0
+TL jump: loading save=_ch_0002_e804de
+TL replay resuming, target={'node_index': 3, 'option_index': 0}
+TL: post-load validation complete (3 nodes)
+TL replay: arrived at node=3 option=0
+TL: post-load validation complete (6 nodes)
+TL AST: scanning 172306 named nodes
+TL AST done: 215 menus
+TL jump: node=3 option=0
+TL jump: loading save=_ch_0002_e804de
+TL replay resuming, target={'node_index': 3, 'option_index': 0}
+TL: post-load validation complete (3 nodes)
+TL replay: arrived at node=3 option=0
+TL: post-load validation complete (4 nodes)
+TL jump: node=8 option=1
+TL jump: loading save=_ch_0004_f003b7
+TL replay resuming, target={'node_index': 8, 'option_index': 1}
+TL: post-load validation complete (5 nodes)
+TL replay: arrived at node=8 option=1
+TL: post-load validation complete (10 nodes)

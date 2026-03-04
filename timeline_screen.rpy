@@ -13,6 +13,7 @@ init:
         blur 48
         matrixcolor SaturationMatrix(0.6)
 
+
 init python:
     def _tl_toggle():
         if renpy.get_screen("timeline"):
@@ -116,13 +117,77 @@ init python:
         "footer_text"   : "#9a9183",
         "btn_bg"        : "#ffffff14",
         "btn_hover_bg"  : "#ffffff28",
-        "opt_hover_bg"  : accent_color + "30",  ## translucent accent for option row hover
+        "hover_bg"      : accent_color + "30",  ## shared hover bg for all interactive rows/buttons
         "btn_text"      : "#c8c0b4",
 
         ## Modal
         "modal_bg"      : "#1a1814ee",
         "modal_header"  : "#f0ece4",
     }
+
+    def _tl_make_hover_gradient(color_hex, center_w=100, edge_w=50, base_hex=None):
+        ## Horizontal gradient: edge_w px fade-in, center_w solid, edge_w px fade-out.
+        ## Frame(..., edge_w, 0) keeps the fade zones fixed and stretches the center
+        ## to any button width.
+        ## base_hex: if given, edges are pre-blended (Porter-Duff hover-over-base) so
+        ## they exactly match the button's normal background instead of going transparent.
+        import io as _io
+        import pygame as _pg
+
+        h      = color_hex.lstrip("#")
+        hr, hg, hb = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        ha     = int(h[6:8], 16) if len(h) >= 8 else 255
+
+        if base_hex is not None:
+            bh = base_hex.lstrip("#")
+            br, bg_, bb = int(bh[0:2], 16), int(bh[2:4], 16), int(bh[4:6], 16)
+            ba = int(bh[6:8], 16) if len(bh) >= 8 else 255
+        else:
+            br = bg_ = bb = ba = 0
+
+        def _pixel(t):
+            if base_hex is None:
+                return (hr, hg, hb, int(ha * t))
+            ## Porter-Duff "over": hover (at effective alpha ha*t) over base
+            eff_h = (ha / 255.0) * t
+            eff_b = ba / 255.0
+            out_f = eff_h + eff_b * (1.0 - eff_h)
+            if out_f > 0:
+                pr = int((hr * eff_h + br * eff_b * (1.0 - eff_h)) / out_f)
+                pg = int((hg * eff_h + bg_ * eff_b * (1.0 - eff_h)) / out_f)
+                pb = int((hb * eff_h + bb * eff_b * (1.0 - eff_h)) / out_f)
+            else:
+                pr = pg = pb = 0
+            return (pr, pg, pb, int(out_f * 255))
+
+        total_w = edge_w + center_w + edge_w
+        surf    = renpy.display.pgrender.surface((total_w, 1), True)
+
+        for x in range(edge_w):
+            t = x / float(edge_w)
+            t = t * t * (3.0 - 2.0 * t)
+            surf.set_at((x, 0), _pixel(t))
+        for x in range(edge_w, edge_w + center_w):
+            surf.set_at((x, 0), _pixel(1.0))
+        for x in range(edge_w + center_w, total_w):
+            t = (total_w - 1 - x) / float(edge_w)
+            t = t * t * (3.0 - 2.0 * t)
+            surf.set_at((x, 0), _pixel(t))
+
+        import tempfile as _tf, os as _os
+        tmp = _tf.mktemp(suffix=".png")
+        try:
+            _pg.image.save(surf, tmp)
+            with open(tmp, "rb") as _f:
+                png_bytes = _f.read()
+        finally:
+            try: _os.unlink(tmp)
+            except: pass
+
+        return Frame(im.Data(png_bytes, "tl_hg.png"), edge_w, 0)
+
+    _tl_hover_gradient      = _tl_make_hover_gradient(TL["hover_bg"])
+    _tl_hover_gradient_wide = _tl_make_hover_gradient(TL["hover_bg"], center_w=60, edge_w=22, base_hex=TL["footer_bg"])
 
 
 ## =============================================================================
@@ -280,14 +345,6 @@ screen timeline():
                                 color TL["header_sub"]
                                 hover_color TL["accent"]
                                 yalign 0.5
-
-                ## DEBUG
-                textbutton "Clear Cache":
-                    action Function(_tl_clear_thumb_cache)
-                    text_color TL["header_sub"]
-                    text_hover_color TL["accent"]
-                    text_size TL_SIZE_BODY
-                    yalign 0.5
 
                 python:
                     _tl_playthrough_new = sum(
@@ -528,14 +585,13 @@ screen tl_card_past(node, chosen_label, has_new, cw=300):
                 ysize 46
                 padding (0, 0, 0, 0)
                 background Solid(TL["footer_bg"])
-                hover_background Solid(TL["btn_hover_bg"])
+                hover_background _tl_hover_gradient_wide
                 action SetVariable("_tl_modal_node", node)
 
                 text "All options {font=DejaVuSans.ttf}▾{/font}":
                     style "tl_base"
                     size TL_SIZE_BODY
                     color TL["btn_text"]
-                    hover_color TL["header_text"]
                     xalign 0.5 yalign 0.5
 
 
@@ -742,7 +798,7 @@ screen tl_modal(node):
                                             xfill True
                                             padding (16, 12, 16, 12)
                                             background None
-                                            hover_background Solid(TL["opt_hover_bg"])
+                                            hover_background _tl_hover_gradient
                                             action [Function(_tl_begin_jump, node["index"], _i), Hide("tl_modal"), Hide("timeline"), Jump("_tl_do_load")]
 
                                             hbox:
@@ -799,7 +855,7 @@ screen tl_modal(node):
                                         xfill True
                                         padding (16, 12, 16, 12)
                                         background None
-                                        hover_background Solid(TL["opt_hover_bg"])
+                                        hover_background _tl_hover_gradient
                                         action [Function(_tl_begin_jump, node["index"], _i), Hide("tl_modal"), Hide("timeline"), Jump("_tl_do_load")]
 
                                         hbox:

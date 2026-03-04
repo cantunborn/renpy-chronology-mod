@@ -13,9 +13,8 @@ init -1 python:
             try:
                 slot = _tl_save_slot(store._tl_early_save_idx, list(_tl_context))
                 renpy.save(slot)
-                _tl_log("TL save refreshed: {}".format(slot))
             except Exception as e:
-                _tl_log("TL save refresh error: {}".format(e))
+                _tl_log("TL ERROR save refresh failed: {}".format(e))
             store._tl_early_save_idx = None
 
         if not _tl_branch_id:
@@ -29,9 +28,8 @@ init -1 python:
                 start_file = _os.path.join(renpy.config.savedir, "_ch_start-LT1.save")
                 if not _os.path.exists(start_file):
                     renpy.save("_ch_start")
-                    _tl_log("TL _ch_start written before first menu")
             except Exception as e:
-                _tl_log("TL _ch_start error: {}".format(e))
+                _tl_log("TL ERROR _ch_start write failed: {}".format(e))
 
         prompt      = ""
         valid_items = []
@@ -132,14 +130,11 @@ init -1 python:
                 _tl_context = _tl_context + [(node["prompt"], i)]
 
                 if not persistent._tl_replaying:
-                    _tl_log("TL recorded: node={} option={}".format(node["index"], i))
                     ## Cannot save here — mid-interaction saves capture rollback
                     ## state from before this interaction, so _tl_history and
                     ## _tl_context would be missing the current node.
                     ## Defer to _tl_interact_callback which fires after interact ends.
                     store._tl_pending_save_index = node["index"]
-                else:
-                    _tl_log("TL replay context rebuild: node={} option={}".format(node["index"], i))
                 return
 
         _tl_log("TL NO MATCH: chosen_label={}".format(repr(chosen_label)))
@@ -156,9 +151,6 @@ init -1 python:
 
         _tl_exports_wrapper._tl_wrapped = True
         renpy.exports.menu = _tl_exports_wrapper
-        _tl_log("TL: exports.menu wrapped")
-    else:
-        _tl_log("TL: exports.menu already wrapped")
 
     if not getattr(renpy.store.menu, "_tl_wrapped", False):
         _tl_original_store_menu = renpy.store.menu
@@ -175,7 +167,7 @@ init -1 python:
                     if target and n_index == target["node_index"]:
                         opt_index = target["option_index"]
                         opt_label = node["options"][opt_index] if opt_index < len(node["options"]) else None
-                        _tl_log("TL replay: reached target node={} picking option={}".format(n_index, opt_index))
+                        _tl_log("TL replay: arrived at node={} option={}".format(n_index, opt_index))
 
                         persistent._tl_replaying     = False
                         persistent._tl_replay_path   = None
@@ -207,8 +199,6 @@ init -1 python:
 
                         if chosen_index is not None and chosen_index < len(node["options"]):
                             opt_label = node["options"][chosen_index]
-                            _tl_log("TL replay: auto-pick node={} option={}".format(n_index, chosen_index))
-
                             ## Populate _choice_returns so dots work correctly
                             for i, lbl in enumerate(node["options"]):
                                 for label, value in items:
@@ -261,10 +251,6 @@ init -1 python:
 
         _tl_store_wrapper._tl_wrapped = True
         renpy.store.menu = _tl_store_wrapper
-        _tl_log("TL: store.menu wrapped (RenPy {}.{})".format(
-            renpy.version_tuple[0], renpy.version_tuple[1]))
-    else:
-        _tl_log("TL: store.menu already wrapped")
 
 
 init 0 python:
@@ -280,9 +266,8 @@ init python:
         try:
             _tl_clear_replay_state()
             renpy.save("_ch_start")
-            _tl_log("TL initial save written")
         except Exception as e:
-            _tl_log("TL initial save error: {}".format(e))
+            _tl_log("TL ERROR initial save failed: {}".format(e))
 
     def _tl_on_load():
         ## Only clear if replaying is True but target is None — stale state
@@ -290,10 +275,10 @@ init python:
         ## and we must NOT clear or menus will fire with replaying=False and
         ## take fresh screenshots.
         if persistent._tl_replaying and persistent._tl_replay_target is None:
-            _tl_log("TL clearing stale replay state on load")
+            _tl_log("TL stale replay state cleared on load")
             _tl_clear_replay_state()
         elif persistent._tl_replaying:
-            _tl_log("TL resuming replay, target={}".format(persistent._tl_replay_target))
+            _tl_log("TL replay resuming, target={}".format(persistent._tl_replay_target))
             ## Re-enable skip after load — config resets on load so we
             ## must set it again here. Not needed for rollback path since
             ## rollback doesn't trigger after_load_callbacks.
@@ -305,9 +290,8 @@ init python:
         if not _os.path.exists(start_file):
             try:
                 renpy.save("_ch_start")
-                _tl_log("TL start save written on load")
             except Exception as e:
-                _tl_log("TL start save error: {}".format(e))
+                _tl_log("TL ERROR start save failed on load: {}".format(e))
 
     def _tl_clear_replay_state():
         persistent._tl_replaying     = False
@@ -323,14 +307,13 @@ init python:
             store._tl_pending_save_index = None
             ## Save every choice for the first TL_DENSE_SAVES nodes (covers early
             ## mandatory inputs like name entry), then every TL_SAVE_EVERY after.
-            if idx < TL_DENSE_SAVES or idx % TL_SAVE_EVERY == (TL_SAVE_EVERY - 1):
+            if _tl_should_save(idx):
                 try:
                     slot = _tl_save_slot(idx, list(_tl_context))
                     renpy.save(slot)
                     store._tl_early_save_idx = idx
-                    _tl_log("TL saved (early): {}".format(slot))
                 except Exception as e:
-                    _tl_log("TL deferred save error: {}".format(e))
+                    _tl_log("TL ERROR deferred save failed idx={}: {}".format(idx, e))
 
     config.start_callbacks.append(_tl_on_game_start)
     config.after_load_callbacks.append(_tl_on_load)

@@ -22,7 +22,7 @@ init -2 python:
 
     TL_SAVE_EVERY       = 10   ## write a checkpoint save every N choices
     TL_DENSE_SAVES      = 5    ## save every choice for the first N nodes
-    TL_THUMB_CACHE_MAX  = 250  ## max thumbnails (~4MB) in persistent cache
+    TL_THUMB_CACHE_MAX  = 500  ## max thumbnails (~25MB at ~50KB/thumb)
 
     ## -------------------------------------------------------------------------
     ## Font size constants
@@ -60,6 +60,12 @@ init -2 python:
 
     def _tl_new_branch_id():
         return uuid.uuid4().hex[:12]
+
+    def _tl_should_save(idx, dense=None, every=None):
+        """Return True if a checkpoint save should be written for this node index."""
+        d = dense if dense is not None else TL_DENSE_SAVES
+        e = every if every is not None else TL_SAVE_EVERY
+        return idx < d or idx % e == e - 1
 
     def _tl_save_slot(node_index, context):
         raw = repr(tuple(context))
@@ -165,8 +171,12 @@ init -2 python:
 
 
     def _tl_make_seen_fn(block):
+        ## Returns a picklable descriptor tuple, not a lambda.
+        ## ("never",)        — always unseen
+        ## ("say",  name)    — check persistent._seen_ever
+        ## ("label", target) — check renpy.seen_label
         if not block:
-            return lambda: False
+            return ("never",)
 
         def find_check(start_node, max_hops=40):
             node = start_node
@@ -176,34 +186,34 @@ init -2 python:
                 if stype == "Say":
                     node_name = getattr(node, "name", None)
                     if node_name is not None:
-                        return lambda n=node_name: n in (persistent._seen_ever or {})
-                    return lambda: False
+                        return ("say", node_name)
+                    return ("never",)
                 elif stype == "Jump":
                     target = getattr(node, "target", None)
                     if target:
-                        return lambda t=target: renpy.seen_label(t)
-                    return lambda: False
+                        return ("label", target)
+                    return ("never",)
                 elif stype == "Call":
                     target = getattr(node, "label", None)
                     if target and isinstance(target, str):
-                        return lambda t=target: renpy.seen_label(t)
-                    return lambda: False
+                        return ("label", target)
+                    return ("never",)
                 elif stype == "Label":
                     target = getattr(node, "name", None)
                     if target and isinstance(target, str):
-                        return lambda t=target: renpy.seen_label(t)
+                        return ("label", target)
                     node = getattr(node, "next", None)
                     hops += 1
                     continue
                 elif stype in ("Return", "Menu"):
-                    return lambda: False
+                    return ("never",)
                 node = getattr(node, "next", None)
                 hops += 1
-            return lambda: False
+            return ("never",)
 
         for stmt in block:
             return find_check(stmt)
-        return lambda: False
+        return ("never",)
 
 
     def _tl_option_seen(node, option_index):
@@ -215,13 +225,17 @@ init -2 python:
                     return bool(cr.get_chosen())
                 except Exception:
                     pass
-        key      = node.get("ast_key")
-        seen_fns = _tl_ast_map.get(key, []) if key else []
-        if option_index < len(seen_fns):
+        key  = node.get("ast_key")
+        desc = (_tl_ast_map.get(key, []) if key else [])
+        if option_index < len(desc):
             try:
-                return seen_fns[option_index]()
+                d = desc[option_index]
+                if d[0] == "say":
+                    return d[1] in (persistent._seen_ever or {})
+                elif d[0] == "label":
+                    return renpy.seen_label(d[1])
             except Exception:
-                return False
+                pass
         return False
 
 
@@ -234,9 +248,9 @@ init -2 python:
 
     def _tl_begin_jump(node_index, option_index):
         try:
+            _tl_log("TL jump: node={} option={}".format(node_index, option_index))
             renpy.save("_ch_recovery")
             persistent._tl_recovery_slot = "_ch_recovery"
-            _tl_log("TL recovery save written")
 
             persistent._tl_replay_path = [
                 {"index": n["index"], "chosen_index": n["chosen_index"]}
@@ -258,18 +272,19 @@ init -2 python:
 
             ## ── Save+skip ────────────────────────────────────────────────────
             nearest = _tl_find_nearest_save(node_index - 1, list(_tl_context))
-            _tl_log("TL begin_jump: save+skip path, nearest={}".format(nearest))
 
             if nearest is not None:
+                _tl_log("TL jump: loading save={}".format(nearest))
                 store._tl_load_slot = nearest
                 return "load"
             else:
+                _tl_log("TL jump: no save found for node={}".format(node_index))
                 _tl_clear_replay_state()
                 renpy.notify("No save found for that choice. Play further to enable jumping.")
                 return None
 
         except Exception as e:
-            _tl_log("TL begin_jump error: {}".format(e))
+            _tl_log("TL ERROR jump failed: {}".format(e))
             _tl_clear_replay_state()
             return None
 
