@@ -10,7 +10,7 @@ Download the zip from the [latest release](../../releases/latest) and follow the
 
 1. Open your game's install folder (right-click the shortcut → *Open file location*, or find it in Steam).
 2. Right-click the zip → **Extract All**, and set the destination to the game's root folder.
-3. Windows will merge the `game/` folders automatically. If asked to replace files, choose **Replace**.
+3. The mod files will be copied into `game/` automatically.
 
 ### macOS
 
