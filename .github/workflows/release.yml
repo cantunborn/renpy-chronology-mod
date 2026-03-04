@@ -77,8 +77,8 @@ jobs:
           TITLE="${{ github.event.inputs.title }}"
           TITLE="${TITLE:-Chronology Mod $VERSION}"
 
+          gh release delete "$VERSION" --repo "${{ github.repository }}" --yes 2>/dev/null || true
           gh release create "$VERSION" "$ZIP" \
             --repo "${{ github.repository }}" \
             --title "$TITLE" \
-            --generate-notes \
-            --clobber
+            --generate-notes
