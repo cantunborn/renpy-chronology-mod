@@ -4,10 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version tag (e.g. v0.1.0)"
+        description: "Version tag (e.g. v1.1 or v1.1-imperial-chronicles)"
         required: true
       title:
         description: "Release title"
+        required: false
+      game:
+        description: "Game branch name (e.g. imperial-chronicles) — leave blank for base mod release"
         required: false
 
 permissions:
@@ -20,6 +23,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.game || github.ref }}
+
+      - name: Run unit tests
+        run: python3 tests/test_unit.py
 
       - name: Build zip
         run: |
@@ -34,6 +42,12 @@ jobs:
              timeline_tests.rpy \
              "$MOD_DIR/"
           cp -r fonts "$MOD_DIR/fonts"
+
+          # Include chapters.json for game-specific releases only
+          GAME="${{ github.event.inputs.game }}"
+          if [ -n "$GAME" ] && [ -f "chapters.json" ]; then
+            cp chapters.json "$MOD_DIR/chapters.json"
+          fi
 
           python3 - README.md "$MOD_DIR/README.txt" <<'PYEOF'
           import sys, re

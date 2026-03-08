@@ -24,6 +24,10 @@ from timeline_init_latest import (
     _tl_validate_history,
     _tl_node_has_new,
     _tl_should_save,
+    _tl_dedup_chapters,
+    _tl_chapter_marker_exists,
+    _tl_rollback_timeline,
+    _tl_chap_end_slot_name,
 )
 
 
@@ -374,6 +378,183 @@ class TestFindNearestSaveDensePattern:
             make_save_files(d, [(9, ctx[:10]), (19, ctx[:20])])
             result = _tl_find_nearest_save(15, ctx, d)
             assert result == _tl_save_slot(9, ctx[:10])
+
+
+# =============================================================================
+# Chapter-end feature (v1.1)
+# =============================================================================
+
+def make_marker(chapter, after_idx, end_label=None):
+    return {
+        "chapter_name": chapter,
+        "after_index":  after_idx,
+        "end_label":    end_label or "{}_end".format(chapter.lower().replace(" ", "_")),
+    }
+
+
+class TestChapterDedup:
+    def test_no_duplicates_unchanged(self):
+        raw = {"Prologue": "prologue_end", "Chapter 1": "ch1_end"}
+        assert _tl_dedup_chapters(raw) == raw
+
+    def test_duplicate_label_first_wins(self):
+        # Both chapters map to same label; first occurrence wins
+        raw = {"Prologue": "shared_end", "Arc 1": "shared_end"}
+        result = _tl_dedup_chapters(raw)
+        assert "Prologue" in result
+        assert "Arc 1" not in result
+
+    def test_empty_returns_empty(self):
+        assert _tl_dedup_chapters({}) == {}
+
+    def test_single_entry(self):
+        raw = {"Ch": "ch_end"}
+        assert _tl_dedup_chapters(raw) == raw
+
+    def test_three_with_one_duplicate_label(self):
+        raw = {"A": "lbl_a", "B": "lbl_b", "C": "lbl_a"}
+        result = _tl_dedup_chapters(raw)
+        assert len(result) == 2
+        assert "A" in result
+        assert "C" not in result
+        assert "B" in result
+
+    def test_unique_labels_all_kept(self):
+        raw = {"X": "x_end", "Y": "y_end", "Z": "z_end"}
+        result = _tl_dedup_chapters(raw)
+        assert len(result) == 3
+
+
+class TestChapterMarkerExists:
+    def test_exact_match_found(self):
+        markers = [make_marker("Prologue", 16, "prologue_end")]
+        assert _tl_chapter_marker_exists(markers, "Prologue", 16) is True
+
+    def test_wrong_after_idx_not_found(self):
+        markers = [make_marker("Prologue", 16, "prologue_end")]
+        assert _tl_chapter_marker_exists(markers, "Prologue", 20) is False
+
+    def test_wrong_chapter_not_found(self):
+        markers = [make_marker("Prologue", 16, "prologue_end")]
+        assert _tl_chapter_marker_exists(markers, "Chapter 1", 16) is False
+
+    def test_empty_markers_returns_false(self):
+        assert _tl_chapter_marker_exists([], "Prologue", 0) is False
+
+    def test_multiple_markers_finds_correct(self):
+        markers = [
+            make_marker("Prologue", 16, "prologue_end"),
+            make_marker("Chapter 1", 30, "ch1_end"),
+        ]
+        assert _tl_chapter_marker_exists(markers, "Chapter 1", 30) is True
+        assert _tl_chapter_marker_exists(markers, "Chapter 1", 16) is False
+
+    def test_after_idx_zero(self):
+        markers = [make_marker("Intro", 0, "intro_end")]
+        assert _tl_chapter_marker_exists(markers, "Intro", 0) is True
+
+
+class TestRollbackTimeline:
+    def _make_history(self, n):
+        return [{"index": i, "options": ["A", "B"]} for i in range(n)]
+
+    def _make_context(self, n):
+        return [("Q{}".format(i), 0) for i in range(n)]
+
+    def test_rollback_trims_to_after_index(self):
+        chapters = {"Prologue": "prologue_end"}
+        markers  = [make_marker("Prologue", 5, "prologue_end")]
+        history  = self._make_history(10)
+        context  = self._make_context(10)
+        h2, c2, m2 = _tl_rollback_timeline(history, context, markers, "prologue_end", chapters)
+        assert len(h2) == 5
+        assert len(c2) == 5
+
+    def test_rollback_keeps_marker_with_matching_after_idx(self):
+        chapters = {"Prologue": "prologue_end"}
+        markers  = [make_marker("Prologue", 5, "prologue_end")]
+        history  = self._make_history(10)
+        context  = self._make_context(10)
+        _, _, m2 = _tl_rollback_timeline(history, context, markers, "prologue_end", chapters)
+        assert len(m2) == 1
+        assert m2[0]["chapter_name"] == "Prologue"
+
+    def test_rollback_drops_later_markers(self):
+        chapters = {"Prologue": "prologue_end", "Chapter 1": "ch1_end"}
+        markers  = [
+            make_marker("Prologue", 5, "prologue_end"),
+            make_marker("Chapter 1", 20, "ch1_end"),
+        ]
+        history = self._make_history(25)
+        context = self._make_context(25)
+        _, _, m2 = _tl_rollback_timeline(history, context, markers, "prologue_end", chapters)
+        names = [m["chapter_name"] for m in m2]
+        assert "Prologue" in names
+        assert "Chapter 1" not in names
+
+    def test_unknown_label_returns_originals(self):
+        chapters = {"Prologue": "prologue_end"}
+        markers  = [make_marker("Prologue", 5, "prologue_end")]
+        history  = self._make_history(10)
+        context  = self._make_context(10)
+        h2, c2, m2 = _tl_rollback_timeline(history, context, markers, "no_such_label", chapters)
+        assert h2 is history
+        assert c2 is context
+        assert m2 is markers
+
+    def test_no_marker_returns_originals(self):
+        chapters = {"Prologue": "prologue_end"}
+        markers  = []   # label registered but no marker recorded yet
+        history  = self._make_history(5)
+        context  = self._make_context(5)
+        h2, c2, m2 = _tl_rollback_timeline(history, context, markers, "prologue_end", chapters)
+        assert h2 is history
+        assert len(m2) == 0
+
+    def test_rollback_to_zero_empties_history(self):
+        chapters = {"Intro": "intro_end"}
+        markers  = [make_marker("Intro", 0, "intro_end")]
+        history  = self._make_history(8)
+        context  = self._make_context(8)
+        h2, c2, _ = _tl_rollback_timeline(history, context, markers, "intro_end", chapters)
+        assert h2 == []
+        assert c2 == []
+
+    def test_empty_chapters_returns_originals(self):
+        history = self._make_history(5)
+        context = self._make_context(5)
+        markers = [make_marker("X", 3, "x_end")]
+        h2, c2, m2 = _tl_rollback_timeline(history, context, markers, "x_end", {})
+        assert h2 is history
+
+    def test_context_and_history_sliced_consistently(self):
+        chapters = {"Ch": "ch_end"}
+        markers  = [make_marker("Ch", 3, "ch_end")]
+        history  = self._make_history(6)
+        context  = self._make_context(6)
+        h2, c2, _ = _tl_rollback_timeline(history, context, markers, "ch_end", chapters)
+        assert len(h2) == len(c2) == 3
+
+
+class TestChapEndSlotName:
+    def test_basic_label(self):
+        assert _tl_chap_end_slot_name("prologue_end") == "_ch_chap_prologue_end"
+
+    def test_prefix(self):
+        slot = _tl_chap_end_slot_name("intro_consequences")
+        assert slot.startswith("_ch_chap_")
+
+    def test_label_preserved(self):
+        slot = _tl_chap_end_slot_name("crown_intro_end")
+        assert "crown_intro_end" in slot
+
+    def test_different_labels_different_slots(self):
+        assert (_tl_chap_end_slot_name("label_a") !=
+                _tl_chap_end_slot_name("label_b"))
+
+    def test_no_spaces_or_special_chars(self):
+        slot = _tl_chap_end_slot_name("my_chapter_end")
+        assert " " not in slot
 
 
 if __name__ == "__main__":

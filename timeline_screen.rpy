@@ -33,6 +33,12 @@ label _tl_do_load:
         $ renpy.load(_tl_load_slot)
     return
 
+label _tl_do_chap_end_jump:
+    if _tl_chap_end_slot:
+        $ renpy.load(_tl_chap_end_slot)
+    else:
+        $ renpy.jump(_tl_label_jump)
+
 
 ## =============================================================================
 ## Design tokens — all colours and sizes in one place
@@ -184,7 +190,7 @@ init python:
             try: _os.unlink(tmp)
             except: pass
 
-        return Frame(im.Data(png_bytes, "tl_hg.png"), edge_w, 0)
+        return Frame(_tl_im_Data(png_bytes, "tl_hg.png"), edge_w, 0)
 
     _tl_hover_gradient      = _tl_make_hover_gradient(TL["hover_bg"])
     _tl_hover_gradient_wide = _tl_make_hover_gradient(TL["hover_bg"], center_w=60, edge_w=22, base_hex=TL["footer_bg"])
@@ -196,7 +202,6 @@ init python:
 
 init python:
     import os as _os
-    _tl_mod_abs    = _os.path.join(renpy.config.gamedir, "renpy-chronology-mod", "fonts")
 
     default_font = None
     default_bold  = None
@@ -230,10 +235,6 @@ init python:
             _tl_font_reg  = "DejaVuSans.ttf"
             _tl_font_bold = "DejaVuSans-Bold.ttf"
 
-
-init python:
-    _tl_renpy_major = renpy.version_tuple[0]   ## 7 or 8
-    _tl_renpy_minor = renpy.version_tuple[1]
 
 style tl_base is text:
     font _tl_font_reg
@@ -413,9 +414,28 @@ screen timeline():
                     _tl_max_cols = max(1, (_tl_avail + _tl_spacing) // (160 + _tl_spacing))
                     _tl_cols     = min(5, _tl_max_cols)
                     _tl_card_w   = (_tl_avail - (_tl_spacing * (_tl_cols - 1))) // _tl_cols
-                    _tl_rows_list = []
-                    for _i in range(0, len(_tl_history), _tl_cols):
-                        _tl_rows_list.append(_tl_history[_i:_i+_tl_cols])
+                    ## Build flat item list; chapter_end node flag drives divider position
+                    _tl_items = []
+                    _tl_cur_row = []
+                    _tl_marked_chapters = set()
+                    for _n in _tl_history:
+                        _tl_cur_row.append(_n)
+                        if len(_tl_cur_row) == _tl_cols:
+                            _tl_items.append(("row", list(_tl_cur_row)))
+                            _tl_cur_row = []
+                        if _n.get("chapter_end"):
+                            _ch = _n["chapter_end"]
+                            _tl_marked_chapters.add(_ch)
+                            if _tl_cur_row:
+                                _tl_items.append(("row", list(_tl_cur_row)))
+                                _tl_cur_row = []
+                            _tl_items.append(("divider", _ch, _tl_chapters.get(_ch, "")))
+                    if _tl_cur_row:
+                        _tl_items.append(("row", list(_tl_cur_row)))
+                    ## Chapters that fired before any history node (no node to mark)
+                    for _m in _tl_chapter_markers:
+                        if _m["chapter_name"] not in _tl_marked_chapters:
+                            _tl_items.append(("divider", _m["chapter_name"], _m["end_label"]))
 
                 frame:
                     style "tl_frame_base"
@@ -427,17 +447,20 @@ screen timeline():
                         xfill True
                         spacing _tl_spacing
 
-                        for _row in _tl_rows_list:
-                            hbox:
-                                spacing _tl_spacing
+                        for _item in _tl_items:
+                            if _item[0] == "divider":
+                                use tl_chapter_divider(_item[1], _item[2])
+                            else:
+                                hbox:
+                                    spacing _tl_spacing
 
-                                for _node in _row:
-                                    use tl_card(_node, _tl_card_w)
+                                    for _node in _item[1]:
+                                        use tl_card(_node, _tl_card_w)
 
-                                python:
-                                    _tl_pad_count = _tl_cols - len(_row)
-                                for _p in range(_tl_pad_count):
-                                    null xsize _tl_card_w
+                                    python:
+                                        _tl_pad_count = _tl_cols - len(_item[1])
+                                    for _p in range(_tl_pad_count):
+                                        null xsize _tl_card_w
 
     if _tl_modal_node is not None:
         use tl_modal(_tl_modal_node)
@@ -459,6 +482,58 @@ screen timeline():
             color TL["btn_text"]
             hover_color TL["header_text"]
             italic False
+
+
+## =============================================================================
+## Chapter divider
+## =============================================================================
+
+screen tl_chapter_divider(chapter_name, end_label):
+
+    python:
+        _tl_div_label  = "End of {}".format(chapter_name)
+        _tl_div_avail  = config.screen_width - 80   ## 40px side padding × 2
+        _tl_div_max_tw = _tl_div_avail * 3 // 10    ## text: 30% of available (wraps if longer)
+        _tl_div_lw     = _tl_div_avail // 4         ## each line: 25% of available
+
+    button:
+        xfill True
+        padding (0, 48, 0, 48)
+        background None
+        hover_background None
+        action [Function(_tl_begin_label_jump, end_label),
+                Hide("timeline"), Jump("_tl_do_chap_end_jump")]
+
+        ## Centered block: [line] [text] [line], with symmetric outer padding
+        hbox:
+            xalign 0.5
+            yalign 0.5
+            spacing 16
+
+            frame:
+                style "tl_frame_base"
+                xsize _tl_div_lw
+                ysize 5
+                yalign 0.5
+                background       Solid(TL["header_text"])
+                hover_background Solid(TL["accent"])
+
+            text _tl_div_label:
+                style "tl_base"
+                size TL_SIZE_HEADER
+                color TL["header_text"]
+                hover_color TL["accent"]
+                xsize _tl_div_max_tw
+                yalign 0.5
+                text_align 0.5
+
+            frame:
+                style "tl_frame_base"
+                xsize _tl_div_lw
+                ysize 5
+                yalign 0.5
+                background       Solid(TL["header_text"])
+                hover_background Solid(TL["accent"])
 
 
 ## =============================================================================

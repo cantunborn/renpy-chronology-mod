@@ -5,7 +5,7 @@
 
 init -2 python:
 
-    import os, uuid
+    import os, uuid, json as _tl_json
     import hashlib as _tl_hashlib
 
     def _tl_log(msg):
@@ -33,6 +33,68 @@ init -2 python:
     TL_SIZE_BADGE  = 12   ## small labels
     TL_SIZE_HEADER = 28   ## modal header
 
+    def _tl_load_chapters():
+        path = os.path.join(renpy.config.gamedir, "renpy-chronology-mod", "chapters.json")
+        try:
+            with open(path, "r") as _f:
+                raw = _tl_json.load(_f)
+        except Exception:
+            return {}
+        seen_labels = {}
+        deduped = {}
+        for _ch_name, _ch_label in raw.items():
+            if _ch_label in seen_labels:
+                _tl_log("TL WARNING chapters.json: label '{}' mapped to both '{}' and '{}'; '{}' wins".format(
+                    _ch_label, seen_labels[_ch_label], _ch_name, seen_labels[_ch_label]))
+            else:
+                seen_labels[_ch_label] = _ch_name
+                deduped[_ch_name] = _ch_label
+        return deduped
+
+    _tl_chapters = _tl_load_chapters()   ## {display_name: end_label}
+
+    def _tl_begin_label_jump(label):
+        try:
+            renpy.save("_ch_recovery")
+            persistent._tl_recovery_slot = "_ch_recovery"
+
+            ## Prefer loading the chapter-end save (captures all state cleanly)
+            import os as _os
+            _slot = "_ch_chap_{}".format(label)
+            _sd   = renpy.config.savedir
+            _exists = (
+                _os.path.exists(_os.path.join(_sd, "{}-LT1.save".format(_slot))) or
+                _os.path.exists(_os.path.join(_sd, "{}.save".format(_slot)))
+            )
+            if _exists:
+                store._tl_chap_end_slot = _slot
+                _tl_log("TL chapter-end jump: loading save={}".format(_slot))
+                return
+
+            ## Fallback (no save yet): jump + manual rollback
+            store._tl_chap_end_slot = ""
+            store._tl_label_jump = label
+            _chapter = next(
+                (ch for ch, lbl in _tl_chapters.items() if lbl == label), None
+            )
+            if _chapter:
+                _marker = next(
+                    (m for m in store._tl_chapter_markers if m["chapter_name"] == _chapter),
+                    None
+                )
+                if _marker:
+                    _ai = _marker["after_index"]
+                    store._tl_history         = store._tl_history[:_ai]
+                    store._tl_node_count      = _ai
+                    store._tl_context         = store._tl_context[:_ai]
+                    store._tl_chapter_markers = [
+                        m for m in store._tl_chapter_markers
+                        if m["after_index"] <= _ai
+                    ]
+            _tl_log("TL chapter-end jump: no save for {}, falling back to jump".format(label))
+        except Exception as e:
+            _tl_log("TL ERROR label jump failed: {}".format(e))
+
 
 ## Per-save variables — safe to load on saves that predate the mod
 default _tl_history    = []   ## list of node dicts
@@ -41,10 +103,14 @@ default _tl_context    = []   ## [(prompt, chosen_index), ...]
 default _tl_node_count = 0
 
 ## UI state — not saved
-default _tl_modal_node = None   ## node whose modal is currently open
-default _tl_load_slot          = ""    ## slot to load via _tl_do_load label
-default _tl_pending_save_index = None  ## node index to save after next interact
-default _tl_early_save_idx     = None  ## idx of save needing refresh after untracked menus
+default _tl_modal_node  = None  ## node whose modal is currently open
+default _tl_load_slot   = ""    ## slot to load via _tl_do_load label
+default _tl_label_jump  = ""    ## label to jump to via _tl_do_label_jump
+default _tl_chapter_markers = []  ## [{chapter_name, end_label, after_index}] — recorded immediately at chapter end labels
+default _tl_pending_save_index    = None  ## node index to save after next interact
+default _tl_early_save_idx        = None  ## idx of save needing refresh after untracked menus
+default _tl_pending_chap_end_save = None  ## end_label to save at next interact
+default _tl_chap_end_slot         = ""    ## load-slot for chapter-end jump (or "" = jump fallback)
 default _tl_ast_ready  = False  ## True once AST map is built
 default _tl_ast_map    = {}     ## {(filename, line): [seen_fn, ...]} — RenPy 7 fallback
 
@@ -118,6 +184,8 @@ init -2 python:
 
         return best_slot
 
+    _tl_im_Data = renpy.display.im.Data   ## canonical path; works RenPy 7 + 8, no deprecation warning
+
     def _tl_capture_thumbnail():
         try:
             return renpy.screenshot_to_bytes((TL_THUMB_WIDTH, TL_THUMB_HEIGHT))
@@ -127,7 +195,7 @@ init -2 python:
 
     def _tl_thumb_displayable(thumb_bytes, index):
         try:
-            return im.Data(thumb_bytes, "tl_t_{}.png".format(index))
+            return _tl_im_Data(thumb_bytes, "tl_t_{}.png".format(index))
         except Exception as e:
             _tl_log("TL thumb displayable failed: {}".format(e))
             return None

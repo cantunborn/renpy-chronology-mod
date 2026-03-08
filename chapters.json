@@ -1,0 +1,5 @@
+{
+    "Prologue":   "your_prologue_end_label",
+    "Chapter 1":  "your_chapter_1_end_label",
+    "Chapter 2":  "your_chapter_2_end_label"
+}

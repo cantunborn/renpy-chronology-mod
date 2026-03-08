@@ -48,12 +48,24 @@ init python:
         for i, node in enumerate(_store._tl_history):
             node["index"] = i
 
+        ## Initialize chapter markers for saves predating this feature; migrate old node tags
+        if not isinstance(getattr(_store, "_tl_chapter_markers", None), list):
+            _store._tl_chapter_markers = []
+            for _node in _store._tl_history:
+                if _node.get("chapter_start"):
+                    _ch = _node["chapter_start"]
+                    _ai = _node["index"]
+                    _el = getattr(_store, "_tl_chapters", {}).get(_ch, "")
+                    if not any(m["after_index"] == _ai for m in _store._tl_chapter_markers):
+                        _store._tl_chapter_markers.append(
+                            {"chapter_name": _ch, "end_label": _el, "after_index": _ai})
+
         ## Reset transient UI state — never safe to restore across sessions
-        _store._tl_modal_node   = None
-        _store._tl_ast_ready    = False
-        _store._tl_ast_progress = 0.0
-        _store._tl_ast_map      = {}
-        _store._tl_global_new   = 0
+        _store._tl_modal_node            = None
+        _store._tl_ast_ready             = False
+        _store._tl_ast_map               = {}
+        _store._tl_pending_chap_end_save = None
+        _store._tl_chap_end_slot         = ""
 
         _tl_log("TL: post-load validation complete ({} nodes)".format(
             len(_store._tl_history)))

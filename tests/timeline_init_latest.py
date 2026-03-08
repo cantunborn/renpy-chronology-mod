@@ -69,3 +69,54 @@ def _tl_node_has_new(node, seen_fn):
             return True
     return False
 
+# ---------------------------------------------------------------------------
+# Chapter-end feature (added in v1.1)
+# ---------------------------------------------------------------------------
+
+def _tl_dedup_chapters(raw):
+    """
+    Deduplicates a {chapter_name: end_label} dict.
+    Duplicate labels (same label mapped to multiple chapters) are silently
+    dropped — first occurrence wins.
+    """
+    seen_labels = {}
+    deduped = {}
+    for ch_name, ch_label in raw.items():
+        if ch_label not in seen_labels:
+            seen_labels[ch_label] = ch_name
+            deduped[ch_name] = ch_label
+    return deduped
+
+def _tl_chapter_marker_exists(markers, chapter, after_idx):
+    """
+    Return True if a marker for (chapter, after_idx) already exists.
+    Used to deduplicate label callbacks that fire multiple times.
+    """
+    return any(
+        m["after_index"] == after_idx and m["chapter_name"] == chapter
+        for m in markers
+    )
+
+def _tl_rollback_timeline(history, context, markers, label, chapters):
+    """
+    Roll back history/context/markers to the state they had at the chapter
+    end identified by `label`.  Returns (history, context, markers) sliced
+    to after_index.  Returns originals unchanged if label is not found.
+    """
+    chapter = next((ch for ch, lbl in chapters.items() if lbl == label), None)
+    if not chapter:
+        return history, context, markers
+    marker = next((m for m in markers if m["chapter_name"] == chapter), None)
+    if not marker:
+        return history, context, markers
+    ai = marker["after_index"]
+    return (
+        history[:ai],
+        context[:ai],
+        [m for m in markers if m["after_index"] <= ai],
+    )
+
+def _tl_chap_end_slot_name(label):
+    """Return the save-slot name for a chapter-end checkpoint."""
+    return "_ch_chap_{}".format(label)
+

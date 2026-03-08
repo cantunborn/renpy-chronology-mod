@@ -109,9 +109,13 @@ init -1 python:
             thumb = _tl_capture_thumbnail()
             node["thumb_bytes"] = thumb
             if cache_key and thumb:
-                persistent._tl_thumb_cache[cache_key] = thumb
-                while len(persistent._tl_thumb_cache) > TL_THUMB_CACHE_MAX:
-                    persistent._tl_thumb_cache.pop(next(iter(persistent._tl_thumb_cache)))
+                try:
+                    persistent._tl_thumb_cache[cache_key] = thumb
+                    while len(persistent._tl_thumb_cache) > TL_THUMB_CACHE_MAX:
+                        persistent._tl_thumb_cache.pop(next(iter(persistent._tl_thumb_cache)))
+                except Exception as e:
+                    _tl_log("TL thumb cache write failed: {}".format(e))
+
 
         _tl_history    = _tl_history + [node]
         _tl_node_count += 1
@@ -314,7 +318,44 @@ init python:
                     store._tl_early_save_idx = idx
                 except Exception as e:
                     _tl_log("TL ERROR deferred save failed idx={}: {}".format(idx, e))
+        if store._tl_pending_chap_end_save:
+            _lbl = store._tl_pending_chap_end_save
+            store._tl_pending_chap_end_save = None
+            try:
+                renpy.save("_ch_chap_{}".format(_lbl))
+                _tl_log("TL chapter-end save: _ch_chap_{}".format(_lbl))
+            except Exception as e:
+                _tl_log("TL ERROR chapter-end save failed: {}".format(e))
 
     config.start_callbacks.append(_tl_on_game_start)
     config.after_load_callbacks.append(_tl_on_load)
     config.interact_callbacks.append(_tl_interact_callback)
+
+    ## Register chapter end label dispatcher (no-op if chapters.json is absent)
+    ## config.label_callbacks is a list of functions called with (label_name,)
+    ## whenever any label is reached — dispatch to the right chapter here.
+    if _tl_chapters:
+        _tl_label_to_chapter = {v: k for k, v in _tl_chapters.items()}
+        def _tl_chapter_label_cb(label_name, abnormal):
+            chapter = _tl_label_to_chapter.get(label_name)
+            if chapter is None:
+                return
+            if persistent._tl_replaying:
+                return
+            after_idx = store._tl_node_count
+            ## Deduplicate: rollback can re-fire this callback at the same position
+            _tl_seen = any(
+                m["after_index"] == after_idx and m["chapter_name"] == chapter
+                for m in store._tl_chapter_markers
+            )
+            if _tl_seen:
+                return
+            store._tl_chapter_markers = store._tl_chapter_markers + [
+                {"chapter_name": chapter, "end_label": label_name, "after_index": after_idx}
+            ]
+            ## Mark the last history node — ties divider position to a specific node
+            if store._tl_history:
+                store._tl_history[-1]["chapter_end"] = chapter
+            store._tl_pending_chap_end_save = label_name  ## save at next interaction
+            _tl_log("TL chapter end: '{}' after_index={}".format(chapter, after_idx))
+        config.label_callbacks.append(_tl_chapter_label_cb)
