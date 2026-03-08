@@ -52,20 +52,21 @@ Jumps use a save + skip approach: the mod loads the nearest checkpoint save and 
 Scene screenshots are cached so the correct image appears on replay and across playthroughs. Thumbnails are stored in RenPy's persistent data file, so they survive mod reinstalls and carry over between sessions. Up to 500 thumbnails are kept; at the limit the persistent file grows by at most ~25 MB. Most games have far fewer unique choice screens, so typical usage is well under 5 MB.
 
 ### Chapter End Indicators
-If you supply a `chapters.json` file, the timeline shows a divider at the end of each chapter. Clicking the divider jumps directly to that chapter's ending — useful for catching up on a new update without replaying everything.
+The mod ships with a sample `chapters.json`. If you populate it with your game's chapters, the timeline shows a divider at the end of each chapter. Clicking the divider jumps directly to that chapter's ending — useful for catching up on a new update without replaying everything.
 
 The divider shows: `—— End of Chapter Name ——`
 
-To enable, create `game/renpy-chronology-mod/chapters.json` and map each chapter's display name to the label that marks its end in the game script:
+Edit `game/renpy-chronology-mod/chapters.json` and replace the sample entries with your game's chapter names and end labels:
 
 ```json
 {
+    "_comment": "...",
     "Prologue":  "prologue_end_label",
     "Chapter 1": "chapter_1_end_label"
 }
 ```
 
-To find a label name: open the RenPy console (Shift+O), navigate to the scene you want to mark, then run `renpy.game.context().current`.
+Any key starting with `_` is ignored. To find a label name: open the RenPy console (Shift+O), navigate to the scene you want to mark, then run `renpy.game.context().current`.
 
 ### Save Compatibility
 - **Installing mid-playthrough:** the mod starts recording from that point. Earlier choices show no history, which is expected.
@@ -108,7 +109,7 @@ Core state and utilities. Runs at `init -2` (before hooks).
 - `_tl_save_slot(index, context)` — deterministic save slot name: `_ch_NNNN_HHHHHH`
 - `_tl_should_save(idx)` — dense saves for first 5 nodes, sparse every 10 after
 - `_tl_find_nearest_save(target, context, save_dir)` — finds highest valid checkpoint ≤ target
-- `_tl_load_chapters()` — reads `chapters.json`; deduplicates labels (first occurrence wins); returns `{display_name: end_label}`
+- `_tl_load_chapters()` — reads `chapters.json`; skips keys starting with `_`; deduplicates labels (first occurrence wins); returns `{display_name: end_label}`
 - `_tl_begin_label_jump(label)` — saves recovery slot, then: if a `_ch_chap_{label}` save exists on disk, sets `_tl_chap_end_slot` for load; otherwise falls back to `renpy.jump` after rolling back `_tl_history`, `_tl_node_count`, `_tl_context`, and `_tl_chapter_markers` to the chapter-end state
 - `_tl_build_ast_map()` — walks RenPy AST to build `{(file, line): [descriptor, ...]}` map for seen detection; runs on a background thread
 - `_tl_make_seen_fn(block)` — returns a picklable descriptor tuple: `("say", name)`, `("label", target)`, or `("never",)`
@@ -150,7 +151,7 @@ Save compatibility and validation.
 - Documents the two compatibility cases: mod installed on old save (graceful empty state), mod removed from save with data (RenPy ignores unknown keys)
 
 ### `chapters.json`
-Optional file at `game/renpy-chronology-mod/chapters.json`. Maps chapter display names to the label that marks each chapter's end in the game script. Duplicate labels are silently dropped (first occurrence wins). Absent or unparseable file disables the chapter feature gracefully.
+Ships as a sample file at `game/renpy-chronology-mod/chapters.json`. Maps chapter display names to the label that marks each chapter's end in the game script. Keys starting with `_` are ignored (used for comments/metadata). Duplicate labels are silently dropped (first occurrence wins). Absent or unparseable file disables the chapter feature gracefully.
 
 ### `tests/timeline_init_latest.py`
 Pure-Python mirror of the testable functions from `timeline_init.rpy`. Keep in sync manually when logic changes. No RenPy dependency — runs with Python 3.7+. Includes chapter-end helpers: `_tl_dedup_chapters`, `_tl_chapter_marker_exists`, `_tl_rollback_timeline`, `_tl_chap_end_slot_name`.

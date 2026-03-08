@@ -43,6 +43,8 @@ init -2 python:
         seen_labels = {}
         deduped = {}
         for _ch_name, _ch_label in raw.items():
+            if _ch_name.startswith("_"):
+                continue
             if _ch_label in seen_labels:
                 _tl_log("TL WARNING chapters.json: label '{}' mapped to both '{}' and '{}'; '{}' wins".format(
                     _ch_label, seen_labels[_ch_label], _ch_name, seen_labels[_ch_label]))

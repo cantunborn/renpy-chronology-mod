@@ -21,6 +21,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Validate game branch
+        if: ${{ github.event.inputs.game != '' }}
+        run: |
+          git ls-remote --exit-code --heads origin "${{ github.event.inputs.game }}" \
+            || { echo "ERROR: branch '${{ github.event.inputs.game }}' does not exist."; exit 1; }
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -42,12 +48,7 @@ jobs:
              timeline_tests.rpy \
              "$MOD_DIR/"
           cp -r fonts "$MOD_DIR/fonts"
-
-          # Include chapters.json for game-specific releases only
-          GAME="${{ github.event.inputs.game }}"
-          if [ -n "$GAME" ] && [ -f "chapters.json" ]; then
-            cp chapters.json "$MOD_DIR/chapters.json"
-          fi
+          cp chapters.json "$MOD_DIR/chapters.json"
 
           python3 - README.md "$MOD_DIR/README.txt" <<'PYEOF'
           import sys, re
@@ -64,6 +65,8 @@ jobs:
               elif re.match(r'^### ', line):
                   out += ["", line[4:].strip()]
               elif re.match(r'^---+$', line.strip()):
+                  pass
+              elif re.match(r'^```', line.strip()):
                   pass
               elif re.match(r'^\|[-| :]+\|$', line.strip()):
                   pass
