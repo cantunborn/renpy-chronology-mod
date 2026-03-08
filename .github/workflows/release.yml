@@ -10,7 +10,7 @@ on:
         description: "Release title"
         required: false
       game:
-        description: "Game branch name (e.g. imperial-chronicles) — leave blank for base mod release"
+        description: "Game name (e.g. imperial-chronicles) — leave blank to ship sample chapters.json"
         required: false
 
 permissions:
@@ -21,16 +21,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Validate game branch
-        if: ${{ github.event.inputs.game != '' }}
-        run: |
-          git ls-remote --exit-code --heads origin "${{ github.event.inputs.game }}" \
-            || { echo "ERROR: branch '${{ github.event.inputs.game }}' does not exist."; exit 1; }
-
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.game || github.ref }}
 
       - name: Run unit tests
         run: python3 tests/test_unit.py
@@ -48,7 +40,13 @@ jobs:
              timeline_tests.rpy \
              "$MOD_DIR/"
           cp -r fonts "$MOD_DIR/fonts"
-          cp chapters.json "$MOD_DIR/chapters.json"
+
+          GAME="${{ github.event.inputs.game }}"
+          GAME_FILE="${GAME:-sample}"
+          if [ ! -f "game-chapters/${GAME_FILE}.json" ]; then
+            echo "ERROR: game-chapters/${GAME_FILE}.json not found"; exit 1
+          fi
+          cp "game-chapters/${GAME_FILE}.json" "$MOD_DIR/chapters.json"
 
           python3 - README.md "$MOD_DIR/README.txt" <<'PYEOF'
           import sys, re

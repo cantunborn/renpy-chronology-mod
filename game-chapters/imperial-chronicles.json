@@ -1,0 +1,15 @@
+{
+    "_comment": "Map each chapter display name to the RenPy label that marks its end in the script. Keys starting with _ are ignored. Find label names: open the RenPy console (Shift+O) and run: renpy.game.context().current",
+    "Prologue":             "intro_consequences",
+    "Arc 1":                "crown_intro_end",
+    "Arc 2":                "royal_intro_end",
+    "Arc 4":                "ending",
+    "Arc 5":                "end",
+    "Arc 6":                "end06",
+    "Arc 7":                "end07",
+    "Arc 8":                "end08",
+    "Arc 9":                "end09",
+    "Arc 10":               "end10",
+    "Arc 12":               "ending012",
+    "Chapter 1 Finale":     "ending_CH1_20"
+}

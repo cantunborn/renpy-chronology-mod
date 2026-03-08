@@ -150,8 +150,8 @@ Save compatibility and validation.
 - `_tl_validate_on_load()` — registered as `after_load_callback`; drops malformed nodes, re-indexes, resets transient UI state (`_tl_modal_node`, `_tl_ast_*`, `_tl_pending_chap_end_save`, `_tl_chap_end_slot`); migrates `chapter_start` node tags from pre-v1.1 saves to `_tl_chapter_markers`
 - Documents the two compatibility cases: mod installed on old save (graceful empty state), mod removed from save with data (RenPy ignores unknown keys)
 
-### `chapters.json`
-Ships as a sample file at `game/renpy-chronology-mod/chapters.json`. Maps chapter display names to the label that marks each chapter's end in the game script. Keys starting with `_` are ignored (used for comments/metadata). Duplicate labels are silently dropped (first occurrence wins). Absent or unparseable file disables the chapter feature gracefully.
+### `game-chapters/`
+Directory of per-game `chapters.json` files, repo-only. `sample.json` is the default shipped with base releases. Game-specific files (e.g. `imperial-chronicles.json`) are selected by name at release time. Each file maps chapter display names to the label that marks the chapter's end in the game script. Keys starting with `_` are ignored (used for comments/metadata). Duplicate labels are silently dropped (first occurrence wins). Absent or unparseable file disables the chapter feature gracefully.
 
 ### `tests/timeline_init_latest.py`
 Pure-Python mirror of the testable functions from `timeline_init.rpy`. Keep in sync manually when logic changes. No RenPy dependency — runs with Python 3.7+. Includes chapter-end helpers: `_tl_dedup_chapters`, `_tl_chapter_marker_exists`, `_tl_rollback_timeline`, `_tl_chap_end_slot_name`.
