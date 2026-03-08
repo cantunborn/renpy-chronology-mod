@@ -331,10 +331,9 @@ init python:
     config.after_load_callbacks.append(_tl_on_load)
     config.interact_callbacks.append(_tl_interact_callback)
 
-    ## Register chapter end label dispatcher (no-op if chapters.json is absent)
-    ## config.label_callbacks is a list of functions called with (label_name,)
-    ## whenever any label is reached — dispatch to the right chapter here.
-    if _tl_chapters:
+    ## Register chapter end label dispatcher (no-op if chapters.json is absent or
+    ## RenPy version predates config.label_callbacks, added in 7.6/8.1).
+    if _tl_chapters and hasattr(config, "label_callbacks"):
         _tl_label_to_chapter = {v: k for k, v in _tl_chapters.items()}
         def _tl_chapter_label_cb(label_name, abnormal):
             chapter = _tl_label_to_chapter.get(label_name)

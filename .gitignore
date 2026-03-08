@@ -1,3 +1,4 @@
 .DS_Store
 .vscode/
 .claude/
+tests/__pycache__/

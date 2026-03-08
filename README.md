@@ -94,6 +94,8 @@ Compatibility holds across both versions for a few reasons:
 - The AST walker uses `type(node).__name__` string checks rather than importing RenPy AST classes directly, so it doesn't break if internal class paths change between 7 and 8.
 - RenPy 8 is built on the same codebase as 7 with a Python 3 runtime; no API used here was removed in the transition.
 
+**Exception:** chapter end indicators require `config.label_callbacks`, which was added in RenPy 7.6 / 8.1. On older versions the feature is silently disabled — the rest of the mod works normally.
+
 ---
 
 <details>
