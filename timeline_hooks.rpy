@@ -9,7 +9,8 @@ init -1 python:
 
         ## Refresh any early save now that we're past any untracked menus
         ## (image menus, call screens) that may have fired since the save was written.
-        if store._tl_early_save_idx is not None and not persistent._tl_replaying:
+        ## Skip during skip mode — saves during rapid skip can race with image loading.
+        if store._tl_early_save_idx is not None and not persistent._tl_replaying and not config.skipping:
             try:
                 slot = _tl_save_slot(store._tl_early_save_idx, list(_tl_context))
                 renpy.save(slot)
@@ -98,24 +99,21 @@ init -1 python:
         cache_key = str(ast_key) if ast_key else None
         cached_thumb = persistent._tl_thumb_cache.get(cache_key) if cache_key else None
 
-        if persistent._tl_replaying:
-            ## During replay, always restore from cache — never take screenshot
-            node["thumb_bytes"] = cached_thumb
-        elif cached_thumb:
-            ## Already seen this menu before — reuse cached thumbnail
-            node["thumb_bytes"] = cached_thumb
-        else:
-            ## First time seeing this menu — capture and cache
+        ## Capture thumbnail only when: not replaying, not already cached, not skipping.
+        ## Cached thumbnails are served via _tl_node_thumb() at display time — never
+        ## stored on the node — so they don't bloat checkpoint saves.
+        if not persistent._tl_replaying and not cached_thumb and not config.skipping:
             thumb = _tl_capture_thumbnail()
-            node["thumb_bytes"] = thumb
             if cache_key and thumb:
                 try:
                     persistent._tl_thumb_cache[cache_key] = thumb
                     while len(persistent._tl_thumb_cache) > TL_THUMB_CACHE_MAX:
                         persistent._tl_thumb_cache.pop(next(iter(persistent._tl_thumb_cache)))
-                    node["thumb_bytes"] = None  ## cleared — served from persistent cache
                 except Exception as e:
                     _tl_log("TL thumb cache write failed: {}".format(e))
+                    node["thumb_bytes"] = thumb  ## fallback: cache failed, keep in node
+            elif thumb:
+                node["thumb_bytes"] = thumb  ## fallback: no cache key, keep in node
 
 
         _tl_history    = _tl_history + [node]
@@ -307,6 +305,11 @@ init python:
         renpy.save_persistent()
 
     def _tl_interact_callback():
+        ## Skip all saves during skip mode — saves during rapid skip can race with
+        ## image loading (especially WebP) in older RenPy versions. Pending indices
+        ## are left set so the save fires at the next non-skip interaction.
+        if config.skipping:
+            return
         if store._tl_pending_save_index is not None:
             idx = store._tl_pending_save_index
             store._tl_pending_save_index = None
