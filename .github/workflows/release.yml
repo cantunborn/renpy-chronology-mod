@@ -4,13 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version tag (e.g. v1.1 or v1.1-imperial-chronicles)"
+        description: "Version string for the zip filename (e.g. v1.2)"
         required: true
-      title:
-        description: "Release title"
-        required: false
       game:
-        description: "Game name (e.g. imperial-chronicles) — leave blank to ship sample chapters.json"
+        description: "Game name (e.g. imperial-chronicles) — leave blank for base mod release"
         required: false
 
 permissions:
@@ -80,20 +77,29 @@ jobs:
           open(dst, "w", encoding="utf-8").write("\n".join(out).strip() + "\n")
           PYEOF
 
+          GAME="${{ github.event.inputs.game }}"
+          ZIP_NAME="chronology-mod-${VERSION}${GAME:+-$GAME}.zip"
           cd staging
-          zip -r "../chronology-mod-${VERSION}.zip" game/ -x "*.DS_Store"
-          echo "ZIP=chronology-mod-${VERSION}.zip" >> "$GITHUB_ENV"
+          zip -r "../${ZIP_NAME}" game/ -x "*.DS_Store"
+          echo "ZIP=${ZIP_NAME}" >> "$GITHUB_ENV"
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${{ github.event.inputs.version }}"
-          TITLE="${{ github.event.inputs.title }}"
-          TITLE="${TITLE:-Chronology Mod $VERSION}"
+          GAME="${{ github.event.inputs.game }}"
 
-          gh release delete "$VERSION" --repo "${{ github.repository }}" --yes 2>/dev/null || true
-          gh release create "$VERSION" "$ZIP" \
+          # Fixed tag and title — one permanent release per target, updated in place
+          if [ -n "$GAME" ]; then
+            TAG="stable-${GAME}"
+            TITLE="Chronology Mod - $(echo "$GAME" | sed 's/-/ /g' | sed 's/\b\(.\)/\u\1/g')"
+          else
+            TAG="stable"
+            TITLE="Chronology Mod - Stable Release"
+          fi
+
+          gh release delete "$TAG" --repo "${{ github.repository }}" --yes 2>/dev/null || true
+          gh release create "$TAG" "$ZIP" \
             --repo "${{ github.repository }}" \
             --title "$TITLE" \
             --generate-notes
