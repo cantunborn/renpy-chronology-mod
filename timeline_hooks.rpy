@@ -305,12 +305,9 @@ init python:
         renpy.save_persistent()
 
     def _tl_interact_callback():
-        ## Skip all saves during skip mode — saves during rapid skip can race with
-        ## image loading (especially WebP) in older RenPy versions. Pending indices
-        ## are left set so the save fires at the next non-skip interaction.
-        if config.skipping:
-            return
-        if store._tl_pending_save_index is not None:
+        ## Checkpoint saves: skip during skip mode to avoid racing with image loading.
+        ## Pending index is left set so the save fires at the next non-skip interaction.
+        if not config.skipping and store._tl_pending_save_index is not None:
             idx = store._tl_pending_save_index
             store._tl_pending_save_index = None
             ## Save every choice for the first TL_DENSE_SAVES nodes (covers early
