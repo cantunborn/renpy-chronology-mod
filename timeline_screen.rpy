@@ -275,6 +275,14 @@ style tl_frame_base is _default:
     padding (0, 0, 0, 0)
 
 init python:
+    def _tl_node_thumb(node):
+        """Return thumbnail bytes for a node: from the node itself or the persistent cache."""
+        b = node.get("thumb_bytes")
+        if b:
+            return b
+        key = str(node["ast_key"]) if node.get("ast_key") else None
+        return persistent._tl_thumb_cache.get(key) if key else None
+
     def _tl_noise_bg():
         return Solid(TL["noise_alpha"])
 
@@ -545,11 +553,12 @@ screen tl_card(node, cw=300):
     python:
         _tl_is_current = (node["index"] == len(_tl_history) - 1 and
                             node.get("chosen_index") is None)
-        _tl_has_thumb  = node.get("thumb_bytes") is not None
+        _tl_thumb      = _tl_node_thumb(node)
+        _tl_has_thumb  = _tl_thumb is not None
         _tl_thumb_h    = int(cw * 9 / 16)
         if _tl_has_thumb:
             _tl_tdisp = _tl_thumb_displayable(
-                node["thumb_bytes"],
+                _tl_thumb,
                 node["index"])
         _tl_chosen_label = (
             node["options"][node["chosen_index"]]
@@ -760,11 +769,12 @@ screen tl_modal(node):
     python:
         _tl_m_w         = 500
         _tl_m_pad       = 28
-        _tl_m_has_thumb = node.get("thumb_bytes") is not None
+        _tl_m_thumb     = _tl_node_thumb(node)
+        _tl_m_has_thumb = _tl_m_thumb is not None
         _tl_m_thumb_w   = _tl_m_w - (_tl_m_pad * 2)
         _tl_m_thumb_h   = int(_tl_m_thumb_w * 9 / 16)
         if _tl_m_has_thumb:
-            _tl_m_tdisp = _tl_thumb_displayable(node["thumb_bytes"], node["index"])
+            _tl_m_tdisp = _tl_thumb_displayable(_tl_m_thumb, node["index"])
         _tl_m_row_h        = 52
         _tl_m_opt_count    = len(node.get("options", []))
         _tl_m_list_h       = _tl_m_opt_count * (_tl_m_row_h + 2)
@@ -1049,7 +1059,7 @@ screen tl_debug():
                     use tl_dbrow("prompt",  (_dbnode["prompt"] or "(none)")[:50])
                     use tl_dbrow("chosen",  str(_dbnode.get("chosen_index")))
                     use tl_dbrow("options", str(len(_dbnode["options"])))
-                    use tl_dbrow("thumb",   "{}b".format(len(_dbnode["thumb_bytes"])) if _dbnode.get("thumb_bytes") else "none")
+                    use tl_dbrow("thumb",   "{}b".format(len(_tl_node_thumb(_dbnode) or b"")) if _tl_node_thumb(_dbnode) else "none")
                     use tl_dbrow("ast_key", str(_dbnode.get("ast_key")))
 
                 null ysize 4

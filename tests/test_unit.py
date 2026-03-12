@@ -28,6 +28,7 @@ from timeline_init_latest import (
     _tl_chapter_marker_exists,
     _tl_rollback_timeline,
     _tl_chap_end_slot_name,
+    _tl_node_thumb,
 )
 
 
@@ -555,6 +556,30 @@ class TestChapEndSlotName:
     def test_no_spaces_or_special_chars(self):
         slot = _tl_chap_end_slot_name("my_chapter_end")
         assert " " not in slot
+
+
+class TestNodeThumb:
+    def test_returns_thumb_bytes_when_present(self):
+        node = {"thumb_bytes": b"img", "ast_key": ("f.rpy", 1)}
+        assert _tl_node_thumb(node, {}) == b"img"
+
+    def test_falls_back_to_persistent_when_none(self):
+        node = {"thumb_bytes": None, "ast_key": ("f.rpy", 1)}
+        cache = {str(("f.rpy", 1)): b"cached"}
+        assert _tl_node_thumb(node, cache) == b"cached"
+
+    def test_returns_none_when_no_key_and_no_bytes(self):
+        node = {"thumb_bytes": None, "ast_key": None}
+        assert _tl_node_thumb(node, {}) is None
+
+    def test_bytes_takes_priority_over_cache(self):
+        node = {"thumb_bytes": b"direct", "ast_key": ("f.rpy", 1)}
+        cache = {str(("f.rpy", 1)): b"cached"}
+        assert _tl_node_thumb(node, cache) == b"direct"
+
+    def test_cache_miss_with_key_returns_none(self):
+        node = {"thumb_bytes": None, "ast_key": ("f.rpy", 1)}
+        assert _tl_node_thumb(node, {}) is None
 
 
 if __name__ == "__main__":

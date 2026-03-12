@@ -120,3 +120,11 @@ def _tl_chap_end_slot_name(label):
     """Return the save-slot name for a chapter-end checkpoint."""
     return "_ch_chap_{}".format(label)
 
+def _tl_node_thumb(node, cache):
+    """Return thumbnail bytes for a node: from the node itself or the persistent cache."""
+    b = node.get("thumb_bytes")
+    if b:
+        return b
+    key = str(node["ast_key"]) if node.get("ast_key") else None
+    return cache.get(key) if key else None
+

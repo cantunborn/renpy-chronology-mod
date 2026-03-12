@@ -113,6 +113,7 @@ init -1 python:
                     persistent._tl_thumb_cache[cache_key] = thumb
                     while len(persistent._tl_thumb_cache) > TL_THUMB_CACHE_MAX:
                         persistent._tl_thumb_cache.pop(next(iter(persistent._tl_thumb_cache)))
+                    node["thumb_bytes"] = None  ## cleared — served from persistent cache
                 except Exception as e:
                     _tl_log("TL thumb cache write failed: {}".format(e))
 

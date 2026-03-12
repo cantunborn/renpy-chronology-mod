@@ -374,6 +374,7 @@ init -2 python:
                 key = str(n.get("ast_key")) if n.get("ast_key") else None
                 if key and n.get("thumb_bytes") and key not in persistent._tl_thumb_cache:
                     persistent._tl_thumb_cache[key] = n["thumb_bytes"]
+                    n["thumb_bytes"] = None  ## cleared — served from persistent cache
                     while len(persistent._tl_thumb_cache) > TL_THUMB_CACHE_MAX:
                         persistent._tl_thumb_cache.pop(next(iter(persistent._tl_thumb_cache)))
             renpy.save_persistent()
