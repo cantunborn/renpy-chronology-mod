@@ -5,12 +5,14 @@
 init -1 python:
 
     def _tl_record_before(items):
+        if not hasattr(store, "_tl_history"):
+            return None  ## store defaults not yet applied (pre-game-start menu)
         global _tl_branch_id, _tl_node_count, _tl_history, _tl_context
 
         ## Refresh any early save now that we're past any untracked menus
         ## (image menus, call screens) that may have fired since the save was written.
         ## Skip during skip mode — saves during rapid skip can race with image loading.
-        if store._tl_early_save_idx is not None and not persistent._tl_replaying and not config.skipping:
+        if getattr(store, "_tl_early_save_idx", None) is not None and not persistent._tl_replaying and not config.skipping:
             try:
                 slot = _tl_save_slot(store._tl_early_save_idx, list(_tl_context))
                 renpy.save(slot)
@@ -309,6 +311,8 @@ init python:
         renpy.save_persistent()
 
     def _tl_interact_callback():
+        if not hasattr(store, "_tl_history"):
+            return  ## store defaults not yet applied (pre-game-start interact)
         ## Checkpoint saves: skip during skip mode to avoid racing with image loading.
         ## Pending index is left set so the save fires at the next non-skip interaction.
         if not config.skipping and store._tl_pending_save_index is not None:

@@ -16,6 +16,8 @@ init:
 
 init python:
     def _tl_toggle():
+        if not hasattr(store, "_tl_history"):
+            return  ## not in-game yet; ignore keybind
         if renpy.get_screen("timeline"):
             renpy.layer_at_list([], layer="master")
             renpy.hide_screen("timeline")
