@@ -64,7 +64,10 @@ def _tl_should_save(idx, dense=5, every=10):
 
 def _tl_node_has_new(node, seen_fn):
     """seen_fn(node, i) -> bool — injected for testability."""
+    chosen_idx = node.get("chosen_index")
     for i in range(len(node.get("options", []))):
+        if i == chosen_idx:
+            continue
         if not seen_fn(node, i):
             return True
     return False

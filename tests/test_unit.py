@@ -262,6 +262,35 @@ class TestNodeHasNew:
         node = make_node(0, [])
         assert _tl_node_has_new(node, self.none_seen) is False
 
+    def test_chosen_option_skipped_even_if_unseen(self):
+        # Chosen option unseen, others all seen → no dot (chosen path is explored by definition)
+        node = make_node(0, ["A", "B", "C"])
+        node["chosen_index"] = 2
+        assert _tl_node_has_new(node, self.all_seen) is False
+        # seen_fn returns True for all — even without the skip this would be False,
+        # so use none_seen and verify chosen is excluded
+        assert _tl_node_has_new(node, lambda n, i: i != 2) is False
+
+    def test_unchosen_unseen_shows_dot(self):
+        # Chosen option seen, one unchosen option unseen → dot
+        node = make_node(0, ["A", "B", "C"])
+        node["chosen_index"] = 0
+        # only option 0 (chosen) is seen; 1 and 2 are unseen → dot
+        assert _tl_node_has_new(node, lambda n, i: i == 0) is True
+
+    def test_all_unchosen_seen_no_dot(self):
+        # Chosen = 1, options 0 and 2 both seen → no dot
+        node = make_node(0, ["A", "B", "C"])
+        node["chosen_index"] = 1
+        assert _tl_node_has_new(node, self.all_seen) is False
+
+    def test_no_chosen_index_checks_all(self):
+        # current card (chosen_index=None) — all options checked normally
+        node = make_node(0, ["A", "B"])
+        node["chosen_index"] = None
+        assert _tl_node_has_new(node, self.none_seen) is True
+        assert _tl_node_has_new(node, self.all_seen) is False
+
 
 # =============================================================================
 # Context accumulation (simulated)
