@@ -303,6 +303,18 @@ init -2 python:
 
 
     def _tl_option_seen(node, option_index):
+        ## Direct lookup in persistent._chosen — the authoritative live dict.
+        ## ChoiceReturn writes (location, label) → True when any option is chosen.
+        ## This is reliable across save/load; cr.chosen (below) is a stale pickle
+        ## snapshot and diverges from the live dict after any save/load cycle.
+        location = node.get("_location")
+        if location is not None and option_index < len(node.get("options", [])):
+            label = node["options"][option_index]
+            if persistent._chosen and (location, label) in persistent._chosen:
+                return True
+
+        ## Legacy fallback: ChoiceReturn.get_chosen() — only reliable within the
+        ## same session; kept for nodes where _location is absent (pre-mod saves).
         crs = node.get("_choice_returns", [])
         if option_index < len(crs):
             cr = crs[option_index]
@@ -311,6 +323,8 @@ init -2 python:
                     return bool(cr.get_chosen())
                 except Exception:
                     pass
+
+        ## AST-map fallback (RenPy seen_ever / seen_label)
         key  = node.get("ast_key")
         desc = (_tl_ast_map.get(key, []) if key else [])
         if option_index < len(desc):
@@ -326,7 +340,12 @@ init -2 python:
 
 
     def _tl_node_has_new(node):
+        ## Skip the chosen option — it's definitively explored (you took that path).
+        ## This mirrors the modal's logic (dots hidden for chosen option there too).
+        chosen_idx = node.get("chosen_index")
         for i in range(len(node.get("options", []))):
+            if i == chosen_idx:
+                continue
             if not _tl_option_seen(node, i):
                 return True
         return False

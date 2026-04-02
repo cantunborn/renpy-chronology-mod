@@ -117,7 +117,8 @@ Core state and utilities. Runs at `init -2` (before hooks).
 - `_tl_begin_label_jump(label)` — saves recovery slot, then: if a `_ch_chap_{label}` save exists on disk, sets `_tl_chap_end_slot` for load; otherwise falls back to `renpy.jump` after rolling back `_tl_history`, `_tl_node_count`, `_tl_context`, and `_tl_chapter_markers` to the chapter-end state
 - `_tl_build_ast_map()` — walks RenPy AST to build `{(file, line): [descriptor, ...]}` map for seen detection; runs on a background thread
 - `_tl_make_seen_fn(block)` — returns a picklable descriptor tuple: `("say", name)`, `("label", target)`, or `("never",)`
-- `_tl_option_seen(node, i)` — resolves seen status via `get_chosen()` first, AST map as fallback
+- `_tl_option_seen(node, i)` — checks `persistent._chosen[(location, label)]` directly first (live, survives save/load), then `ChoiceReturn.get_chosen()` as legacy fallback, then AST map
+- `_tl_node_has_new(node)` — returns True if any unchosen option is unseen; skips the chosen option (always explored, mirrors modal dot logic)
 - `_tl_begin_jump(node_index, option_index)` — saves recovery, sets persistent replay state, loads nearest checkpoint
 - `_tl_capture_thumbnail()` — screenshots current scene at `TL_THUMB_WIDTH × TL_THUMB_HEIGHT`; returns `None` immediately on RenPy < 7.5 (no `screenshot_to_bytes`)
 - `_tl_thumb_displayable(bytes, index)` — returns displayable from cached bytes via `renpy.display.im.Data`; detects WEBP/JPEG/PNG from magic bytes so `im.Data` decodes correctly across RenPy versions
