@@ -419,8 +419,9 @@ screen timeline():
                     _tl_side_pad = 40
                     _tl_spacing  = 16
                     _tl_avail    = config.screen_width - (_tl_side_pad * 2)
-                    _tl_max_cols = max(1, (_tl_avail + _tl_spacing) // (160 + _tl_spacing))
-                    _tl_cols     = min(5, _tl_max_cols)
+                    _tl_max_cols = (_tl_avail + _tl_spacing) // (160 + _tl_spacing)
+                    if _tl_max_cols < 1: _tl_max_cols = 1
+                    _tl_cols     = _tl_max_cols if _tl_max_cols < 5 else 5
                     _tl_card_w   = (_tl_avail - (_tl_spacing * (_tl_cols - 1))) // _tl_cols
                     ## Build flat item list; chapter_end node flag drives divider position
                     _tl_items = []
@@ -641,27 +642,12 @@ screen tl_card_past(node, chosen_label, has_new, cw=300):
                 background Solid(TL["footer_bg"])
 
                 if has_new:
-                    hbox:
-                        spacing 6 yalign 0.5
-
-                        text "●":
-                            style "tl_icon"
-                            size TL_SIZE_DOT
-                            color TL["new_dot"]
-                            yalign 0.5
-                            italic False
-
-                        text "New":
-                            style "tl_base"
-                            size TL_SIZE_BODY
-                            color TL["new_dot"]
-                            yalign 0.5
-                else:
-                    text "All seen":
-                        style "tl_base"
-                        size TL_SIZE_BODY
-                        color TL["header_sub"]
+                    text "●":
+                        style "tl_icon"
+                        size TL_SIZE_DOT
+                        color TL["new_dot"]
                         yalign 0.5
+                        italic False
 
             button:
                 style "tl_frame_base"

@@ -191,7 +191,11 @@ init -1 python:
                                 if label == opt_label:
                                     _tl_pending[0] = None
                                     _tl_record_after(node, opt_label)
-                                    return value.value if hasattr(value, "value") else value
+                                    ## Call value() rather than reading .value directly so
+                                    ## ChoiceReturn.__call__ records this choice in
+                                    ## persistent._chosen — required for get_chosen() to
+                                    ## return True and dots to clear after replay.
+                                    return value() if hasattr(value, "value") else value
 
                     else:
                         chosen_index = None
@@ -213,7 +217,7 @@ init -1 python:
                                 if label == opt_label:
                                     _tl_pending[0] = None
                                     _tl_record_after(node, opt_label)
-                                    return value.value if hasattr(value, "value") else value
+                                    return value() if hasattr(value, "value") else value
 
             ## ── Normal flow ───────────────────────────────────────────────────
             node = _tl_pending[0]

@@ -189,6 +189,13 @@ init -2 python:
     _tl_im_Data = renpy.display.im.Data   ## canonical path; works RenPy 7 + 8, no deprecation warning
 
     def _tl_capture_thumbnail():
+        ## screenshot_to_bytes was added in RenPy 7.5. Older versions lack a
+        ## supported API for in-memory screenshot capture — the internal fallback
+        ## (draw.screenshot) produces black images on 7.4.x due to a flip-ordering
+        ## bug in the GL2 renderer. Thumbnails are silently skipped on < 7.5;
+        ## the rest of the mod (choice tracking, dots, jump-back) still works.
+        if not hasattr(renpy, "screenshot_to_bytes"):
+            return None
         try:
             return renpy.screenshot_to_bytes((TL_THUMB_WIDTH, TL_THUMB_HEIGHT))
         except Exception as e:
@@ -197,7 +204,16 @@ init -2 python:
 
     def _tl_thumb_displayable(thumb_bytes, index):
         try:
-            return _tl_im_Data(thumb_bytes, "tl_t_{}.png".format(index))
+            ## Detect image format from magic bytes so im.Data decodes correctly
+            ## regardless of what screenshot_to_bytes returns (JPEG on older RenPy,
+            ## PNG or WebP on newer).
+            if thumb_bytes[:4] == b"RIFF" and thumb_bytes[8:12] == b"WEBP":
+                ext = "webp"
+            elif thumb_bytes[:2] == b"\xff\xd8":
+                ext = "jpg"
+            else:
+                ext = "png"
+            return _tl_im_Data(thumb_bytes, "tl_t_{}.{}".format(index, ext))
         except Exception as e:
             _tl_log("TL thumb displayable failed: {}".format(e))
             return None

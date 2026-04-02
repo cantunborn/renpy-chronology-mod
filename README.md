@@ -96,6 +96,8 @@ Compatibility holds across both versions for a few reasons:
 
 **Exception:** chapter end indicators require `config.label_callbacks`, which was added in RenPy 7.6 / 8.1. On older versions the feature is silently disabled — the rest of the mod works normally.
 
+**Exception:** scene thumbnails on cards require `renpy.screenshot_to_bytes`, added in RenPy 7.5. On older versions thumbnails are skipped — cards show a plain background instead. Choice tracking, dots, jump-back, and chapter markers all work normally.
+
 ---
 
 <details>
@@ -117,8 +119,8 @@ Core state and utilities. Runs at `init -2` (before hooks).
 - `_tl_make_seen_fn(block)` — returns a picklable descriptor tuple: `("say", name)`, `("label", target)`, or `("never",)`
 - `_tl_option_seen(node, i)` — resolves seen status via `get_chosen()` first, AST map as fallback
 - `_tl_begin_jump(node_index, option_index)` — saves recovery, sets persistent replay state, loads nearest checkpoint
-- `_tl_capture_thumbnail()` — screenshots current scene at `TL_THUMB_WIDTH × TL_THUMB_HEIGHT`
-- `_tl_thumb_displayable(bytes, index)` — returns displayable from cached bytes via `renpy.display.im.Data`
+- `_tl_capture_thumbnail()` — screenshots current scene at `TL_THUMB_WIDTH × TL_THUMB_HEIGHT`; returns `None` immediately on RenPy < 7.5 (no `screenshot_to_bytes`)
+- `_tl_thumb_displayable(bytes, index)` — returns displayable from cached bytes via `renpy.display.im.Data`; detects WEBP/JPEG/PNG from magic bytes so `im.Data` decodes correctly across RenPy versions
 
 ### `timeline_hooks.rpy`
 Menu interception and save callbacks. Runs at `init -1`.
@@ -126,7 +128,7 @@ Menu interception and save callbacks. Runs at `init -1`.
 - Wraps `renpy.exports.menu` and `renpy.store.menu` once at init (idempotent guard)
 - `_tl_record_before(items)` — fires before each menu: refreshes early save, creates node dict with thumbnail and AST key, handles replay reuse
 - `_tl_record_after(node, chosen_label)` — fires after choice: updates `chosen_index`, extends `_tl_context`, queues deferred save
-- `_tl_store_wrapper` — replay interception: at target node, auto-picks option and exits skip mode; at intermediate nodes, auto-picks from stored replay path
+- `_tl_store_wrapper` — replay interception: at target node, auto-picks option and exits skip mode; at intermediate nodes, auto-picks from stored replay path; calls `value()` (not `value.value`) so `ChoiceReturn.__call__` records the choice to `persistent._chosen` and dots clear after replay
 - `_tl_interact_callback` — deferred save trigger: fires after each interaction; writes choice checkpoint if `_tl_should_save(idx)`; also writes `_ch_chap_{label}` chapter-end save if `_tl_pending_chap_end_save` is set
 - `_tl_chapter_label_cb` — registered via `config.label_callbacks`; fires when any chapter end label is reached; records `{chapter_name, end_label, after_index}` to `_tl_chapter_markers`, sets `chapter_end` on the last history node, queues chapter-end save; deduplicates on `(chapter_name, after_index)` pair
 - `_tl_on_game_start` — writes `_ch_start` save at game start (ultimate fallback for jumping to node 0)
@@ -142,7 +144,7 @@ All UI. No game logic.
 - `screen timeline()` — root screen; blur layer + dark overlay + header + scrollable card list; `_tl_items` builder interleaves `("divider", chapter_name, end_label)` tuples from node `chapter_end` flags and `_tl_chapter_markers`
 - `screen tl_chapter_divider(chapter_name, end_label)` — centered `—— End of {chapter} ——` divider; clicking calls `_tl_begin_label_jump` then `Jump("_tl_do_chap_end_jump")`
 - `screen tl_card(node, cw)` — dispatches to `tl_card_past` or `tl_card_current`
-- `screen tl_card_past(node, chosen_label, has_new, cw)` — thumbnail + chosen option + footer (New dot, All options button)
+- `screen tl_card_past(node, chosen_label, has_new, cw)` — thumbnail + chosen option + footer (dot ● when unexplored paths exist, All options button)
 - `screen tl_card_current(node, cw)` — thumbnail + full option list with seen indicators
 - `screen tl_modal(node)` — full-screen modal with all options, chosen marker, seen dots, jump actions
 
