@@ -449,6 +449,240 @@ init python:
             "_ch_chap_label_a" != "_ch_chap_label_b")
 
 
+    def _tl_test_shadow_path_store_defaults(r):
+        """Shadow path store and persistent variables exist with correct types."""
+        s = "shadow_path_defaults"
+        import store as _st
+        r.check(s, "_tl_shadow_path is list or None",
+            getattr(_st, "_tl_shadow_path", "MISSING") is None or
+            isinstance(getattr(_st, "_tl_shadow_path", None), list))
+        r.check(s, "_tl_pending_shadow_path is list or None",
+            getattr(persistent, "_tl_pending_shadow_path", "MISSING") is None or
+            isinstance(getattr(persistent, "_tl_pending_shadow_path", None), list))
+
+
+    def _tl_test_shadow_path_set_on_jump(r):
+        """
+        _tl_begin_jump stages shadow path into persistent._tl_pending_shadow_path
+        from history nodes after the target, without touching store._tl_shadow_path
+        (which a checkpoint load would overwrite).
+        """
+        s = "shadow_path_jump"
+        import store as _st
+
+        saved_history     = list(_st._tl_history)
+        saved_count       = _st._tl_node_count
+        saved_context     = list(_st._tl_context)
+        saved_replaying   = persistent._tl_replaying
+        saved_target      = persistent._tl_replay_target
+        saved_path        = persistent._tl_replay_path
+        saved_recovery    = persistent._tl_recovery_slot
+        saved_psp         = persistent._tl_pending_shadow_path
+        saved_store_sp    = getattr(_st, "_tl_shadow_path", None)
+        saved_prev_thumb  = persistent._tl_prev_thumb
+
+        try:
+            ## Build synthetic history: 3 nodes, all resolved
+            def _mk(idx, opts, prompt, ci, loc):
+                return {"index": idx, "options": opts, "prompt": prompt,
+                    "chosen_index": ci, "_location": loc,
+                    "_choice_returns": [None, None],
+                    "thumb_bytes": None, "ast_key": None, "_rollback_id": None}
+            _st._tl_history = [
+                _mk(0, ["A", "B"], "Q0", 0, "loc0"),
+                _mk(1, ["X", "Y"], "Q1", 1, "loc1"),
+                _mk(2, ["P", "Q"], "Q2", 0, "loc2"),
+            ]
+            _st._tl_context    = [("Q0", 0), ("Q1", 1), ("Q2", 0)]
+            _st._tl_node_count = 3
+
+            ## Jump to node 0 choosing option 1 (different from original 0)
+            ## _tl_begin_jump saves recovery and returns "load" or None.
+            ## We don't actually load — just check persistent staging.
+            _tl_begin_jump(0, 1)
+
+            ## pending_shadow_path should contain nodes 1 and 2 (after the target)
+            psp = persistent._tl_pending_shadow_path
+            r.check(s, "pending_shadow_path is list", isinstance(psp, list))
+            r.check(s, "pending has 2 entries (nodes after target)", len(psp) == 2)
+            r.check(s, "entry 0 location correct", psp[0]["location"] == "loc1")
+            r.check(s, "entry 0 chosen_index correct", psp[0]["chosen_index"] == 1)
+            r.check(s, "entry 1 location correct", psp[1]["location"] == "loc2")
+            r.check(s, "entry 1 chosen_index correct", psp[1]["chosen_index"] == 0)
+
+            ## store._tl_shadow_path should NOT be set here (would be wiped by load)
+            ## It is set only in _tl_on_load after the checkpoint loads.
+            ## We just verify pending was staged, not that store was written.
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            _st._tl_history    = saved_history
+            _st._tl_node_count = saved_count
+            _st._tl_context    = saved_context
+            persistent._tl_replaying          = saved_replaying
+            persistent._tl_replay_target      = saved_target
+            persistent._tl_replay_path        = saved_path
+            persistent._tl_recovery_slot      = saved_recovery
+            persistent._tl_pending_shadow_path = saved_psp
+            persistent._tl_prev_thumb         = saved_prev_thumb
+            _st._tl_shadow_path               = saved_store_sp
+
+
+    def _tl_test_shadow_path_empty_after_last_node(r):
+        """
+        When jumping to the last history node, shadow path is empty → None.
+        """
+        s = "shadow_path_empty_tail"
+        import store as _st
+
+        saved_history     = list(_st._tl_history)
+        saved_count       = _st._tl_node_count
+        saved_context     = list(_st._tl_context)
+        saved_replaying   = persistent._tl_replaying
+        saved_target      = persistent._tl_replay_target
+        saved_path        = persistent._tl_replay_path
+        saved_recovery    = persistent._tl_recovery_slot
+        saved_psp         = persistent._tl_pending_shadow_path
+        saved_prev_thumb  = persistent._tl_prev_thumb
+
+        try:
+            def _mk2(idx, opts, prompt, ci, loc):
+                return {"index": idx, "options": opts, "prompt": prompt,
+                    "chosen_index": ci, "_location": loc,
+                    "_choice_returns": [None, None],
+                    "thumb_bytes": None, "ast_key": None, "_rollback_id": None}
+            _st._tl_history = [_mk2(0, ["A", "B"], "Q0", 0, "loc0")]
+            _st._tl_context    = [("Q0", 0)]
+            _st._tl_node_count = 1
+
+            _tl_begin_jump(0, 1)
+
+            psp = persistent._tl_pending_shadow_path
+            r.check(s, "pending_shadow_path is None when no nodes after target",
+                psp is None)
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            _st._tl_history    = saved_history
+            _st._tl_node_count = saved_count
+            _st._tl_context    = saved_context
+            persistent._tl_replaying          = saved_replaying
+            persistent._tl_replay_target      = saved_target
+            persistent._tl_replay_path        = saved_path
+            persistent._tl_recovery_slot      = saved_recovery
+            persistent._tl_pending_shadow_path = saved_psp
+            persistent._tl_prev_thumb         = saved_prev_thumb
+
+
+    def _tl_test_shadow_path_consume_and_diverge(r):
+        """
+        Shadow path consumption stamps _shadow_orig_chosen on node when
+        the player chose differently, and removes entries up to the match.
+        """
+        s = "shadow_path_consume"
+        import store as _st
+
+        saved_sp = getattr(_st, "_tl_shadow_path", None)
+
+        try:
+            _st._tl_shadow_path = [
+                {"location": "loc_before", "chosen_index": 1},
+                {"location": "loc_target", "chosen_index": 0},
+                {"location": "loc_after",  "chosen_index": 1},
+            ]
+
+            ## Simulate a node at loc_target where player chose index 1 (orig was 0)
+            node = {
+                "index": 5, "options": ["A", "B"], "prompt": "Q",
+                "chosen_index": 1, "_location": "loc_target",
+                "_shadow_orig_chosen": None,
+            }
+            ## Remove _shadow_orig_chosen=None so we test the set case
+            del node["_shadow_orig_chosen"]
+
+            new_sp, div_ci = _tl_consume_shadow_path(
+                _st._tl_shadow_path, node["_location"], node["chosen_index"])
+
+            if div_ci is not None:
+                node["_shadow_orig_chosen"] = div_ci
+            _st._tl_shadow_path = new_sp
+
+            r.check(s, "orig_chosen stamped", node.get("_shadow_orig_chosen") == 0)
+            r.check(s, "shadow_path trimmed to tail",
+                _st._tl_shadow_path == [{"location": "loc_after", "chosen_index": 1}])
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            _st._tl_shadow_path = saved_sp
+
+
+    def _tl_test_shadow_path_same_choice_no_diverge(r):
+        """No _shadow_orig_chosen stamped when player makes the same choice."""
+        s = "shadow_path_no_diverge"
+        import store as _st
+
+        saved_sp = getattr(_st, "_tl_shadow_path", None)
+
+        try:
+            _st._tl_shadow_path = [
+                {"location": "loc_target", "chosen_index": 1},
+            ]
+            node = {"chosen_index": 1, "_location": "loc_target"}
+
+            new_sp, div_ci = _tl_consume_shadow_path(
+                _st._tl_shadow_path, node["_location"], node["chosen_index"])
+
+            r.check(s, "div_ci is None for same choice", div_ci is None)
+            r.check(s, "no _shadow_orig_chosen set",
+                "_shadow_orig_chosen" not in node)
+            r.check(s, "path exhausted to None", new_sp is None)
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            _st._tl_shadow_path = saved_sp
+
+
+    def _tl_test_validate_shadow_path_corruption(r):
+        """_tl_validate_on_load resets shadow path if corrupted."""
+        s = "shadow_path_validate"
+        import store as _st
+
+        saved_history = list(_st._tl_history)
+        saved_sp      = getattr(_st, "_tl_shadow_path", None)
+
+        try:
+            _st._tl_history     = []
+            _st._tl_shadow_path = "corrupted"   ## wrong type
+
+            _tl_validate_on_load()
+
+            r.check(s, "corrupted shadow_path reset to None",
+                getattr(_st, "_tl_shadow_path", "MISSING") is None)
+
+            ## Valid list should survive unchanged
+            _st._tl_shadow_path = [{"location": "loc0", "chosen_index": 1}]
+            _tl_validate_on_load()
+            sp = getattr(_st, "_tl_shadow_path", None)
+            r.check(s, "valid list preserved",
+                isinstance(sp, list) and len(sp) == 1)
+
+            ## None should survive unchanged
+            _st._tl_shadow_path = None
+            _tl_validate_on_load()
+            r.check(s, "None preserved",
+                getattr(_st, "_tl_shadow_path", "MISSING") is None)
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            _st._tl_history     = saved_history
+            _st._tl_shadow_path = saved_sp
+
+
     def _tl_run_tests():
         r = _TLTestResults()
 
@@ -465,6 +699,12 @@ init python:
         _tl_test_chapter_marker_dedup(r)
         _tl_test_label_jump_rollback(r)
         _tl_test_chap_end_slot_name(r)
+        _tl_test_shadow_path_store_defaults(r)
+        _tl_test_shadow_path_set_on_jump(r)
+        _tl_test_shadow_path_empty_after_last_node(r)
+        _tl_test_shadow_path_consume_and_diverge(r)
+        _tl_test_shadow_path_same_choice_no_diverge(r)
+        _tl_test_validate_shadow_path_corruption(r)
 
         # Write results to debug.txt (renpy-chronology-mod/debug.txt via _tl_log)
         _tl_log("=" * 60)
@@ -482,9 +722,9 @@ init python:
 
         # Also show in-game notification
         if r.failed == 0:
-            renpy.notify("✓ All {} tests passed".format(r.passed))
+            renpy.notify("PASS: All {} tests passed".format(r.passed))
         else:
-            renpy.notify("✗ {}/{} tests FAILED — check debug.txt".format(
+            renpy.notify("FAIL: {}/{} tests failed - check debug.txt".format(
                 r.failed, r.passed + r.failed))
 
         store._tl_test_results = r

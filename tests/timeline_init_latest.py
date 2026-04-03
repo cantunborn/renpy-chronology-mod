@@ -131,3 +131,46 @@ def _tl_node_thumb(node, cache):
     key = str(node["ast_key"]) if node.get("ast_key") else None
     return cache.get(key) if key else None
 
+def _tl_build_shadow_path(history, node_index):
+    """Build the replay-aid shadow path from history nodes after node_index."""
+    path, past = [], False
+    for n in history:
+        if past:
+            loc = n.get("_location")
+            ci  = n.get("chosen_index")
+            if loc is not None and ci is not None:
+                path.append({"location": loc, "chosen_index": ci})
+        elif n["index"] == node_index:
+            past = True
+    return path
+
+def _tl_shadow_match(shadow_path, location):
+    """Return chosen_index from the first shadow path entry matching location, or None."""
+    for entry in shadow_path:
+        if entry["location"] == location:
+            return entry["chosen_index"]
+    return None
+
+def _tl_consume_shadow_path(shadow_path, location, chosen_index):
+    """
+    Consume shadow path entries up to and including the first entry matching `location`.
+    Returns (new_path_or_none, orig_ci_or_none).
+    orig_ci is the matched entry's chosen_index when it differs from chosen_index (diverged),
+    or None when choices match or no entry matched.
+    """
+    if not shadow_path:
+        return shadow_path, None
+    new_sp = []
+    matched = False
+    orig_ci = None
+    for e in shadow_path:
+        if not matched and e["location"] == location:
+            matched = True
+            orig_ci = e["chosen_index"]
+        elif matched:
+            new_sp.append(e)
+    if not matched:
+        return shadow_path, None
+    diverged_ci = orig_ci if orig_ci != chosen_index else None
+    return new_sp or None, diverged_ci
+
