@@ -41,12 +41,21 @@ The header shows a count of how many past choices have at least one new path ava
 ### All Options Modal
 Click **All options** on any past card to see every choice that was available at that point:
 - `→` marks the option you chose
+- A muted `→` marks the option you made on the path this save was forked from
 - A dot marks options with unseen content
 
-### Jump Back
-In the modal, click any option to jump back to that point in the story and make a different choice. The mod saves a recovery point before jumping so you can return if needed.
+### Jump Back and Forking
+In the modal, click any option to jump back to that point in the story and play from there with a different choice. The mod saves a recovery point before jumping so you can return to the original path if needed.
 
 Jumps use a save + skip approach: the mod loads the nearest checkpoint save and fast-forwards through dialogue to reach the target choice automatically.
+
+**Forking a save.** A common use is to duplicate a save before jumping, keeping the original intact. The duplicate becomes a fork — an independent run from that branch point. Hints from the original path carry over into the forked save, so you always know where the two paths differ:
+
+- At each **upcoming menu**, a muted `→` marks the choice you made on the original path. You can follow it or go a different way — your call.
+- The **jump point itself** gets a `⎇` marker in the timeline if you chose differently, making it easy to see where the fork started.
+- **Further down the timeline**, any card where your new choices diverge from the original also shows `⎇`. Open the All Options modal on those cards to see which option the original path took.
+
+Hints are tied to the save file, not the session — they persist across loads and carry over when you duplicate or share a save. They clear automatically as each matching menu is reached, and disappear entirely if you jump again (resetting the reference path to the current run).
 
 ### Thumbnail Cache
 Scene screenshots are cached so the correct image appears on replay and across playthroughs. Thumbnails are stored in RenPy's persistent data file, so they survive mod reinstalls and carry over between sessions. Up to 500 thumbnails are kept; at the limit the persistent file grows by at most ~25 MB. Most games have far fewer unique choice screens, so typical usage is well under 5 MB.
@@ -106,8 +115,8 @@ Compatibility holds across both versions for a few reasons:
 ### `timeline_init.rpy`
 Core state and utilities. Runs at `init -2` (before hooks).
 
-- Store variables: `_tl_history`, `_tl_context`, `_tl_branch_id`, `_tl_node_count`, `_tl_chapter_markers`
-- Persistent variables: `_tl_replaying`, `_tl_replay_target`, `_tl_replay_path`, `_tl_recovery_slot`, `_tl_thumb_cache`, `_tl_prev_thumb`
+- Store variables (saved with game): `_tl_history`, `_tl_context`, `_tl_branch_id`, `_tl_node_count`, `_tl_chapter_markers`, `_tl_shadow_path`
+- Persistent variables: `_tl_replaying`, `_tl_replay_target`, `_tl_replay_path`, `_tl_recovery_slot`, `_tl_thumb_cache`, `_tl_prev_thumb`, `_tl_pending_shadow_path` (transit only — staged in `_tl_begin_jump`, transferred to store in `_tl_on_load`)
 - Transient (not saved): `_tl_pending_chap_end_save`, `_tl_chap_end_slot`, `_tl_label_jump`
 - Constants: `TL_SAVE_EVERY` (10), `TL_DENSE_SAVES` (5), `TL_THUMB_CACHE_MAX` (500)
 - `_tl_save_slot(index, context)` — deterministic save slot name: `_ch_NNNN_HHHHHH`
@@ -119,7 +128,10 @@ Core state and utilities. Runs at `init -2` (before hooks).
 - `_tl_make_seen_fn(block)` — returns a picklable descriptor tuple: `("say", name)`, `("label", target)`, or `("never",)`
 - `_tl_option_seen(node, i)` — checks `persistent._chosen[(location, label)]` directly first (live, survives save/load), then `ChoiceReturn.get_chosen()` as legacy fallback, then AST map
 - `_tl_node_has_new(node)` — returns True if any unchosen option is unseen; skips the chosen option (always explored, mirrors modal dot logic)
-- `_tl_begin_jump(node_index, option_index)` — saves recovery, sets persistent replay state, loads nearest checkpoint
+- `_tl_begin_jump(node_index, option_index)` — saves recovery point *before* setting shadow path (so cancel restores shadow-free state); builds shadow path from history nodes after target; stages it in `persistent._tl_pending_shadow_path` (store would be overwritten by checkpoint load); `_tl_on_load` transfers it into `store._tl_shadow_path` after load; shadow path is a save variable so it persists across save/load and carries over in duplicated saves
+- `_tl_build_shadow_path(history, node_index)` — pure helper; returns list of `{location, chosen_index}` for nodes after `node_index`
+- `_tl_shadow_match(shadow_path, location)` — returns chosen_index of first entry matching location, or None
+- `_tl_consume_shadow_path(shadow_path, location, chosen_index)` — consumes entries up to and including the first match for `location`; returns `(new_path_or_none, diverged_orig_ci_or_none)`; diverged_orig_ci is set only when the matched chosen_index differs from the player's choice
 - `_tl_capture_thumbnail()` — screenshots current scene at `TL_THUMB_WIDTH × TL_THUMB_HEIGHT`; returns `None` immediately on RenPy < 7.5 (no `screenshot_to_bytes`)
 - `_tl_thumb_displayable(bytes, index)` — returns displayable from cached bytes via `renpy.display.im.Data`; detects WEBP/JPEG/PNG from magic bytes so `im.Data` decodes correctly across RenPy versions
 
@@ -129,7 +141,7 @@ Menu interception and save callbacks. Runs at `init -1`.
 - Wraps `renpy.exports.menu` and `renpy.store.menu` once at init (idempotent guard)
 - `_tl_record_before(items)` — fires before each menu: refreshes early save, creates node dict with thumbnail and AST key, handles replay reuse
 - `_tl_record_after(node, chosen_label)` — fires after choice: updates `chosen_index`, extends `_tl_context`, queues deferred save
-- `_tl_store_wrapper` — replay interception: at target node, auto-picks option and exits skip mode; at intermediate nodes, auto-picks from stored replay path; calls `value()` (not `value.value`) so `ChoiceReturn.__call__` records the choice to `persistent._chosen` and dots clear after replay
+- `_tl_store_wrapper` — replay interception: at target node, auto-picks option, exits skip mode, stamps `node["_shadow_orig_chosen"]` if the chosen option differs from the pre-jump choice (looked up from `persistent._tl_replay_path`); at intermediate nodes, auto-picks from stored replay path; calls `value()` (not `value.value`) so `ChoiceReturn.__call__` records the choice to `persistent._chosen` and dots clear after replay; in normal flow, calls `_tl_consume_shadow_path` to consume entries on match, stamps `_shadow_orig_chosen` on the node when diverged
 - `_tl_interact_callback` — deferred save trigger: fires after each interaction; writes choice checkpoint if `_tl_should_save(idx)`; also writes `_ch_chap_{label}` chapter-end save if `_tl_pending_chap_end_save` is set
 - `_tl_chapter_label_cb` — registered via `config.label_callbacks`; fires when any chapter end label is reached; records `{chapter_name, end_label, after_index}` to `_tl_chapter_markers`, sets `chapter_end` on the last history node, queues chapter-end save; deduplicates on `(chapter_name, after_index)` pair
 - `_tl_on_game_start` — writes `_ch_start` save at game start (ultimate fallback for jumping to node 0)
@@ -145,21 +157,21 @@ All UI. No game logic.
 - `screen timeline()` — root screen; blur layer + dark overlay + header + scrollable card list; `_tl_items` builder interleaves `("divider", chapter_name, end_label)` tuples from node `chapter_end` flags and `_tl_chapter_markers`
 - `screen tl_chapter_divider(chapter_name, end_label)` — centered `—— End of {chapter} ——` divider; clicking calls `_tl_begin_label_jump` then `Jump("_tl_do_chap_end_jump")`
 - `screen tl_card(node, cw)` — dispatches to `tl_card_past` or `tl_card_current`
-- `screen tl_card_past(node, chosen_label, has_new, cw)` — thumbnail + chosen option + footer (dot ● when unexplored paths exist, All options button)
-- `screen tl_card_current(node, cw)` — thumbnail + full option list with seen indicators
-- `screen tl_modal(node)` — full-screen modal with all options, chosen marker, seen dots, jump actions
+- `screen tl_card_past(node, chosen_label, has_new, cw)` — thumbnail + chosen option + footer (`⎇` when `node["_shadow_orig_chosen"]` is set i.e. path diverged here, else `●` when unexplored paths exist, All options button)
+- `screen tl_card_current(node, cw)` — thumbnail + full option list with seen indicators; muted `→` on the option matching the current shadow path entry (replay aid hint)
+- `screen tl_modal(node)` — full-screen modal with all options, chosen marker `→`, muted `→` for original shadow choice (from `_shadow_orig_chosen` for past nodes, or shadow path for current node), seen dots `●`, jump actions
 
 ### `timeline_save_hooks.rpy`
 Save compatibility and validation.
 
-- `_tl_validate_on_load()` — registered as `after_load_callback`; drops malformed nodes, re-indexes, resets transient UI state (`_tl_modal_node`, `_tl_ast_*`, `_tl_pending_chap_end_save`, `_tl_chap_end_slot`); migrates `chapter_start` node tags from pre-v1.1 saves to `_tl_chapter_markers`
+- `_tl_validate_on_load()` — registered as `after_load_callback`; drops malformed nodes, re-indexes, validates `_tl_shadow_path` (must be list or None) and `persistent._tl_pending_shadow_path`, resets transient UI state (`_tl_modal_node`, `_tl_ast_*`, `_tl_pending_chap_end_save`, `_tl_chap_end_slot`); migrates `chapter_start` node tags from pre-v1.1 saves to `_tl_chapter_markers`; `_shadow_orig_chosen` on nodes is left intact (persists with save)
 - Documents the two compatibility cases: mod installed on old save (graceful empty state), mod removed from save with data (RenPy ignores unknown keys)
 
 ### `game-chapters/`
 Directory of per-game `chapters.json` files, repo-only. `sample.json` is the default shipped with base releases. Game-specific files (e.g. `imperial-chronicles.json`) are selected by name at release time. Each file maps chapter display names to the label that marks the chapter's end in the game script. Keys starting with `_` are ignored (used for comments/metadata). Duplicate labels are silently dropped (first occurrence wins). Absent or unparseable file disables the chapter feature gracefully.
 
 ### `tests/timeline_init_latest.py`
-Pure-Python mirror of the testable functions from `timeline_init.rpy`. Keep in sync manually when logic changes. No RenPy dependency — runs with Python 3.7+. Includes chapter-end helpers: `_tl_dedup_chapters`, `_tl_chapter_marker_exists`, `_tl_rollback_timeline`, `_tl_chap_end_slot_name`.
+Pure-Python mirror of the testable functions from `timeline_init.rpy`. Keep in sync manually when logic changes. No RenPy dependency — runs with Python 3.7+. Includes chapter-end helpers (`_tl_dedup_chapters`, `_tl_chapter_marker_exists`, `_tl_rollback_timeline`, `_tl_chap_end_slot_name`) and replay-aid helpers (`_tl_build_shadow_path`, `_tl_shadow_match`, `_tl_consume_shadow_path`).
 
 ### `timeline_tests.rpy`
 In-game test runner for RenPy-dependent behaviour that can't be tested outside the engine. Press **Shift+F9** during gameplay to run. Results are written to `debug.txt` and shown as an in-game notification.
@@ -167,7 +179,7 @@ In-game test runner for RenPy-dependent behaviour that can't be tested outside t
 Suites: hook wiring (single-wrap guard), persistent state init, store defaults, `_tl_save_slot` stability, thumbnail capture, thumbnail cache read/write/eviction, `_tl_record_before` → `_tl_record_after` pipeline, `_tl_node_has_new` via `get_chosen()`, `_tl_validate_on_load` history cleaning, chapter store defaults, chapter marker dedup, `_tl_begin_label_jump` rollback correctness, chapter-end slot naming.
 
 ### `tests/test_unit.py`
-72 unit tests covering `_tl_save_slot`, `_tl_find_nearest_save`, `_tl_validate_history`, `_tl_node_has_new`, `_tl_should_save`, context accumulation, two-phase save consistency, dense/sparse save patterns, chapter dedup, chapter marker existence, timeline rollback, and chapter-end slot naming.
+105 unit tests covering `_tl_save_slot`, `_tl_find_nearest_save`, `_tl_validate_history`, `_tl_node_has_new`, `_tl_should_save`, context accumulation, two-phase save consistency, dense/sparse save patterns, chapter dedup, chapter marker existence, timeline rollback, chapter-end slot naming, `_tl_build_shadow_path`, `_tl_shadow_match`, and `_tl_consume_shadow_path`.
 
 Run with: `python3 tests/test_unit.py` or `pytest tests/test_unit.py -v`
 

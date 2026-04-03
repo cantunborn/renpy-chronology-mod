@@ -177,9 +177,12 @@ init -1 python:
                         persistent._tl_replaying     = False
                         persistent._tl_replay_path   = None
                         persistent._tl_replay_target = None
-                        renpy.save_persistent()
+                        ## Always disable skip when replay ends — shadow_path stays set
+                        ## for the "Autoplay from here?" button, but the player must
+                        ## opt in manually. No automatic shadow replay activation.
                         config.skipping = None
                         renpy.game.preferences.skip_unseen = False
+                        renpy.save_persistent()
 
                         ## Populate _choice_returns so get_chosen() works correctly
                         for i, lbl in enumerate(node["options"]):
@@ -192,7 +195,18 @@ init -1 python:
                             for label, value in items:
                                 if label == opt_label:
                                     _tl_pending[0] = None
+                                    ## Stamp divergence marker if the jump chose a different option.
+                                    ## node["chosen_index"] may be None when the save loaded is from
+                                    ## before this node existed, so read the original choice from
+                                    ## persistent._tl_replay_path which was snapshotted pre-load.
+                                    _orig_ci = None
+                                    for _pe in (path or []):
+                                        if _pe["index"] == n_index:
+                                            _orig_ci = _pe["chosen_index"]
+                                            break
                                     _tl_record_after(node, opt_label)
+                                    if _orig_ci is not None and opt_index != _orig_ci:
+                                        node["_shadow_orig_chosen"] = _orig_ci
                                     ## Call value() rather than reading .value directly so
                                     ## ChoiceReturn.__call__ records this choice in
                                     ## persistent._chosen — required for get_chosen() to
@@ -254,6 +268,20 @@ init -1 python:
                     _tl_log("TL: no label match for rv={} type={}".format(
                         repr(rv)[:60], type(rv).__name__))
 
+                ## Replay aid: consume shadow path entries when a matching menu is reached.
+                ## Discard all entries before the match + the match itself.
+                ## If the player chose differently, stamp _shadow_orig_chosen on the node
+                ## so the divergence marker can still display after the entry is gone.
+                if store._tl_shadow_path and node is not None:
+                    _cur_loc = node.get("_location")
+                    if _cur_loc:
+                        _new_sp, _div_ci = _tl_consume_shadow_path(
+                            store._tl_shadow_path, _cur_loc, node.get("chosen_index"))
+                        if _new_sp != store._tl_shadow_path:  ## matched — update path
+                            if _div_ci is not None:
+                                node["_shadow_orig_chosen"] = _div_ci
+                            store._tl_shadow_path = _new_sp
+
                 _tl_pending[0] = None
 
             return rv
@@ -293,6 +321,12 @@ init python:
             ## rollback doesn't trigger after_load_callbacks.
             config.skipping = "fast"
             renpy.game.preferences.skip_unseen = True
+            ## Transfer shadow path from persistent staging into the store now that
+            ## the checkpoint load is complete (store vars were overwritten by load).
+            if persistent._tl_pending_shadow_path is not None:
+                store._tl_shadow_path = persistent._tl_pending_shadow_path
+                persistent._tl_pending_shadow_path = None
+                renpy.save_persistent()
         ## Write _ch_start if it doesn't exist yet
         import os as _os
         start_file = _os.path.join(renpy.config.savedir, "_ch_start-LT1.save")
@@ -306,8 +340,9 @@ init python:
         persistent._tl_replaying     = False
         persistent._tl_replay_path   = None
         persistent._tl_replay_target = None
-        persistent._tl_recovery_slot = None
-        persistent._tl_prev_thumb    = None
+        persistent._tl_recovery_slot       = None
+        persistent._tl_prev_thumb          = None
+        persistent._tl_pending_shadow_path = None
         renpy.save_persistent()
 
     def _tl_interact_callback():
@@ -347,8 +382,6 @@ init python:
         def _tl_chapter_label_cb(label_name, abnormal):
             chapter = _tl_label_to_chapter.get(label_name)
             if chapter is None:
-                return
-            if persistent._tl_replaying:
                 return
             after_idx = store._tl_node_count
             ## Deduplicate: rollback can re-fire this callback at the same position

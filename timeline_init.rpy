@@ -115,6 +115,7 @@ default _tl_pending_chap_end_save = None  ## end_label to save at next interact
 default _tl_chap_end_slot         = ""    ## load-slot for chapter-end jump (or "" = jump fallback)
 default _tl_ast_ready  = False  ## True once AST map is built
 default _tl_ast_map    = {}     ## {(filename, line): [seen_fn, ...]} — RenPy 7 fallback
+default _tl_shadow_path = None  ## [{location, chosen_index}] replay-aid hints, or None
 
 ## Replay state — stored in persistent so it survives a save/load cycle.
 init python:
@@ -122,6 +123,8 @@ init python:
         persistent._tl_replaying = False
     if persistent._tl_thumb_cache is None:
         persistent._tl_thumb_cache = {}
+    if not hasattr(persistent, "_tl_pending_shadow_path"):
+        persistent._tl_pending_shadow_path = None
 
 
 init -2 python:
@@ -351,6 +354,30 @@ init -2 python:
         return False
 
 
+    def _tl_consume_shadow_path(shadow_path, location, chosen_index):
+        """
+        Consume shadow path entries up to and including the first entry matching location.
+        Returns (new_path_or_none, diverged_orig_ci_or_none).
+        diverged_orig_ci is set only when the matched entry's chosen_index differs from
+        chosen_index; None when choices match or no entry matched.
+        """
+        if not shadow_path:
+            return shadow_path, None
+        new_sp  = []
+        matched = False
+        orig_ci = None
+        for e in shadow_path:
+            if not matched and e["location"] == location:
+                matched = True
+                orig_ci = e["chosen_index"]
+            elif matched:
+                new_sp.append(e)
+        if not matched:
+            return shadow_path, None
+        diverged_ci = orig_ci if orig_ci != chosen_index else None
+        return new_sp or None, diverged_ci
+
+
     def _tl_begin_jump(node_index, option_index):
         try:
             _tl_log("TL jump: node={} option={}".format(node_index, option_index))
@@ -373,6 +400,25 @@ init -2 python:
                     break
             persistent._tl_prev_thumb = prev_node["thumb_bytes"] if prev_node else None
             persistent._tl_replaying = True
+
+            ## ── Shadow path: menus after the target, shared with original history ──
+            ## Built now so the store wrapper can auto-fill them after replay ends.
+            _shadow_path = []
+            _past = False
+            for _n in _tl_history:
+                if _past:
+                    _loc = _n.get("_location")
+                    _ci  = _n.get("chosen_index")
+                    if _loc is not None and _ci is not None:
+                        _shadow_path.append({"location": _loc, "chosen_index": _ci})
+                elif _n["index"] == node_index:
+                    _past = True
+            ## Shadow path must survive the checkpoint load that follows, so stage it in
+            ## persistent. _tl_on_load transfers it into store._tl_shadow_path after load
+            ## (store vars would be overwritten by the checkpoint). Recovery save is taken
+            ## above before this line, so cancel restores store._tl_shadow_path cleanly.
+            persistent._tl_pending_shadow_path = _shadow_path or None
+
             renpy.save_persistent()
 
             ## ── Save+skip ────────────────────────────────────────────────────

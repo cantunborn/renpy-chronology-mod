@@ -60,13 +60,20 @@ init python:
                         _store._tl_chapter_markers.append(
                             {"chapter_name": _ch, "end_label": _el, "after_index": _ai})
 
+        ## Validate shadow path — must be a list or None
+        if not isinstance(getattr(_store, "_tl_shadow_path", None), (list, type(None))):
+            _store._tl_shadow_path = None
+
+        ## Validate pending shadow path in persistent (transit variable, should always be list or None)
+        if not isinstance(getattr(persistent, "_tl_pending_shadow_path", None), (list, type(None))):
+            persistent._tl_pending_shadow_path = None
+
         ## Reset transient UI state — never safe to restore across sessions
         _store._tl_modal_node            = None
         _store._tl_ast_ready             = False
         _store._tl_ast_map               = {}
         _store._tl_pending_chap_end_save = None
         _store._tl_chap_end_slot         = ""
-
         _tl_log("TL: post-load validation complete ({} nodes)".format(
             len(_store._tl_history)))
 

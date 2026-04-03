@@ -25,6 +25,7 @@ init python:
             renpy.layer_at_list([tl_layer_blur], layer="master")
             renpy.show_screen("timeline")
 
+
 ## =============================================================================
 ## Chronology — jump helper label
 ## Called via renpy.jump() to escape screen context before loading a save.
@@ -632,6 +633,9 @@ screen tl_card_past(node, chosen_label, has_new, cw=300):
             xsize cw ysize 1
             background Solid(TL["divider"])
 
+        python:
+            _tl_diverged = node.get("_shadow_orig_chosen") is not None
+
         hbox:
             xsize cw
             spacing 0
@@ -643,7 +647,14 @@ screen tl_card_past(node, chosen_label, has_new, cw=300):
                 padding (12, 0, 8, 0)
                 background Solid(TL["footer_bg"])
 
-                if has_new:
+                if _tl_diverged:
+                    text "⎇":
+                        style "tl_icon"
+                        size TL_SIZE_BODY
+                        color TL["header_sub"]
+                        yalign 0.5
+                        italic False
+                elif has_new:
                     text "●":
                         style "tl_icon"
                         size TL_SIZE_DOT
@@ -673,6 +684,17 @@ screen tl_card_past(node, chosen_label, has_new, cw=300):
 
 screen tl_card_current(node, cw=300):
 
+    python:
+        _sp = _tl_shadow_path or []
+        _cur_loc = node.get("_location")
+        ## Find first shadow path entry matching this menu (replay aid).
+        ## Entry may be at index > 0 if earlier entries are from divergent menus.
+        _shadow_ci = None
+        for _se in _sp:
+            if _se["location"] == _cur_loc:
+                _shadow_ci = _se["chosen_index"]
+                break
+
     vbox:
         xsize cw
         spacing 0
@@ -680,6 +702,7 @@ screen tl_card_current(node, cw=300):
         for _i, _opt in enumerate(node["options"]):
             python:
                 _tl_show_dot = not _tl_option_seen(node, _i)
+                _tl_is_aid   = (_shadow_ci is not None and _i == _shadow_ci)
 
             frame:
                 style "tl_frame_base"
@@ -692,12 +715,22 @@ screen tl_card_current(node, cw=300):
                     spacing 8
                     yalign 0.5
 
-                    if _tl_show_dot:
+                    ## One indicator column: replay-aid arrow takes priority over unseen dot.
+                    ## Matches the modal's single-column pattern (→ / ● / null).
+                    if _tl_is_aid:
+                        text "→":
+                            style "tl_icon"
+                            size TL_SIZE_BODY
+                            color TL["header_sub"]
+                            yalign 0.5
+                            italic False
+                    elif _tl_show_dot:
                         text "●":
                             style "tl_icon"
                             size TL_SIZE_DOT
                             color TL["opt_new_dot"]
                             yalign 0.5
+                            italic False
                     else:
                         null xsize 14
 
@@ -866,6 +899,14 @@ screen tl_modal(node):
                                         python:
                                             _tl_is_chosen = (node.get("chosen_index") == _i)
                                             _tl_show_dot  = not _tl_option_seen(node, _i) and not _tl_is_chosen
+                                            _tl_shadow_ci = node.get("_shadow_orig_chosen")
+                                            if _tl_shadow_ci is None and _tl_shadow_path:
+                                                _m_loc = node.get("_location")
+                                                for _se in _tl_shadow_path:
+                                                    if _se["location"] == _m_loc:
+                                                        _tl_shadow_ci = _se["chosen_index"]
+                                                        break
+                                            _tl_is_aid = (_tl_shadow_ci is not None and _i == _tl_shadow_ci and not _tl_is_chosen)
 
                                         button:
                                             xfill True
@@ -885,6 +926,13 @@ screen tl_modal(node):
                                                         size TL_SIZE_BODY
                                                         color TL["opt_chosen_fg"]
                                                         yalign 0.5
+                                                elif _tl_is_aid:
+                                                    text "→":
+                                                        style "tl_icon"
+                                                        size TL_SIZE_BODY
+                                                        color TL["header_sub"]
+                                                        yalign 0.5
+                                                        italic False
                                                 elif _tl_show_dot:
                                                     text "●":
                                                         style "tl_icon"
@@ -923,6 +971,14 @@ screen tl_modal(node):
                                     python:
                                         _tl_is_chosen = (node.get("chosen_index") == _i)
                                         _tl_show_dot  = not _tl_option_seen(node, _i) and not _tl_is_chosen
+                                        _tl_shadow_ci = node.get("_shadow_orig_chosen")
+                                        if _tl_shadow_ci is None and _tl_shadow_path:
+                                            _m_loc = node.get("_location")
+                                            for _se in _tl_shadow_path:
+                                                if _se["location"] == _m_loc:
+                                                    _tl_shadow_ci = _se["chosen_index"]
+                                                    break
+                                        _tl_is_aid = (_tl_shadow_ci is not None and _i == _tl_shadow_ci and not _tl_is_chosen)
 
                                     button:
                                         xfill True
@@ -942,6 +998,13 @@ screen tl_modal(node):
                                                     size TL_SIZE_BODY
                                                     color TL["opt_chosen_fg"]
                                                     yalign 0.5
+                                            elif _tl_is_aid:
+                                                text "→":
+                                                    style "tl_icon"
+                                                    size TL_SIZE_BODY
+                                                    color TL["header_sub"]
+                                                    yalign 0.5
+                                                    italic False
                                             elif _tl_show_dot:
                                                 text "●":
                                                     style "tl_icon"
@@ -987,6 +1050,8 @@ default _tl_debug_visible = False
 screen _tl_debug_overlay():
     if _tl_debug_visible:
         use tl_debug()
+
+
 
 init python:
     config.keymap["tl_debug_toggle"] = ["K_BACKQUOTE"]
