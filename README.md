@@ -123,7 +123,7 @@ Core state and utilities. Runs at `init -2` (before hooks).
 - `_tl_should_save(idx)` — dense saves for first 5 nodes, sparse every 10 after
 - `_tl_find_nearest_save(target, context, save_dir)` — finds highest valid checkpoint ≤ target
 - `_tl_load_chapters()` — reads `chapters.json`; skips keys starting with `_`; deduplicates labels (first occurrence wins); returns `{display_name: end_label}`
-- `_tl_begin_label_jump(label)` — saves recovery slot, then: if a `_ch_chap_{label}` save exists on disk, sets `_tl_chap_end_slot` for load; otherwise falls back to `renpy.jump` after rolling back `_tl_history`, `_tl_node_count`, `_tl_context`, and `_tl_chapter_markers` to the chapter-end state
+- `_tl_begin_label_jump(label)` — saves recovery slot, then: computes hashed slot `_ch_chap_{label}_{hash}` (hash = MD5[:6] of `_tl_context[:after_index]`) from the chapter marker; if that save exists on disk, sets `_tl_chap_end_slot` for load; otherwise falls back to `renpy.jump` after rolling back `_tl_history`, `_tl_node_count`, `_tl_context`, and `_tl_chapter_markers` to the chapter-end state
 - `_tl_build_ast_map()` — walks RenPy AST to build `{(file, line): [descriptor, ...]}` map for seen detection; runs on a background thread
 - `_tl_make_seen_fn(block)` — returns a picklable descriptor tuple: `("say", name)`, `("label", target)`, or `("never",)`
 - `_tl_option_seen(node, i)` — checks `persistent._chosen[(location, label)]` directly first (live, survives save/load), then `ChoiceReturn.get_chosen()` as legacy fallback, then AST map
@@ -142,7 +142,7 @@ Menu interception and save callbacks. Runs at `init -1`.
 - `_tl_record_before(items)` — fires before each menu: refreshes early save, creates node dict with thumbnail and AST key, handles replay reuse
 - `_tl_record_after(node, chosen_label)` — fires after choice: updates `chosen_index`, extends `_tl_context`, queues deferred save
 - `_tl_store_wrapper` — replay interception: at target node, auto-picks option, exits skip mode, stamps `node["_shadow_orig_chosen"]` if the chosen option differs from the pre-jump choice (looked up from `persistent._tl_replay_path`); at intermediate nodes, auto-picks from stored replay path; calls `value()` (not `value.value`) so `ChoiceReturn.__call__` records the choice to `persistent._chosen` and dots clear after replay; in normal flow, calls `_tl_consume_shadow_path` to consume entries on match, stamps `_shadow_orig_chosen` on the node when diverged
-- `_tl_interact_callback` — deferred save trigger: fires after each interaction; writes choice checkpoint if `_tl_should_save(idx)`; also writes `_ch_chap_{label}` chapter-end save if `_tl_pending_chap_end_save` is set
+- `_tl_interact_callback` — deferred save trigger: fires after each interaction; writes choice checkpoint if `_tl_should_save(idx)`; also writes `_ch_chap_{label}_{hash}` chapter-end save if `_tl_pending_chap_end_save` is set (hash = MD5[:6] of `_tl_context[:after_index]`, scoping the save to this playthrough's choice path)
 - `_tl_chapter_label_cb` — registered via `config.label_callbacks`; fires when any chapter end label is reached; records `{chapter_name, end_label, after_index}` to `_tl_chapter_markers`, sets `chapter_end` on the last history node, queues chapter-end save; deduplicates on `(chapter_name, after_index)` pair
 - `_tl_on_game_start` — writes `_ch_start` save at game start (ultimate fallback for jumping to node 0)
 - `_tl_on_load` — resumes skip mode on load if mid-replay; writes `_ch_start` if missing
@@ -179,7 +179,7 @@ In-game test runner for RenPy-dependent behaviour that can't be tested outside t
 Suites: hook wiring (single-wrap guard), persistent state init, store defaults, `_tl_save_slot` stability, thumbnail capture, thumbnail cache read/write/eviction, `_tl_record_before` → `_tl_record_after` pipeline, `_tl_node_has_new` via `get_chosen()`, `_tl_validate_on_load` history cleaning, chapter store defaults, chapter marker dedup, `_tl_begin_label_jump` rollback correctness, chapter-end slot naming.
 
 ### `tests/test_unit.py`
-105 unit tests covering `_tl_save_slot`, `_tl_find_nearest_save`, `_tl_validate_history`, `_tl_node_has_new`, `_tl_should_save`, context accumulation, two-phase save consistency, dense/sparse save patterns, chapter dedup, chapter marker existence, timeline rollback, chapter-end slot naming, `_tl_build_shadow_path`, `_tl_shadow_match`, and `_tl_consume_shadow_path`.
+109 unit tests covering `_tl_save_slot`, `_tl_find_nearest_save`, `_tl_validate_history`, `_tl_node_has_new`, `_tl_should_save`, context accumulation, two-phase save consistency, dense/sparse save patterns, chapter dedup, chapter marker existence, timeline rollback, chapter-end slot naming (plain and hashed forms), `_tl_build_shadow_path`, `_tl_shadow_match`, and `_tl_consume_shadow_path`.
 
 Run with: `python3 tests/test_unit.py` or `pytest tests/test_unit.py -v`
 
