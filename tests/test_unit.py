@@ -589,6 +589,28 @@ class TestChapEndSlotName:
         slot = _tl_chap_end_slot_name("my_chapter_end")
         assert " " not in slot
 
+    # Hashed form tests
+    def test_hashed_same_context_same_slot(self):
+        ctx = [("q", 0), ("r", 1)]
+        assert (_tl_chap_end_slot_name("ch_end", ctx, 2) ==
+                _tl_chap_end_slot_name("ch_end", ctx, 2))
+
+    def test_hashed_different_context_different_slot(self):
+        ctx_a = [("q", 0), ("r", 0)]
+        ctx_b = [("q", 0), ("r", 1)]
+        assert (_tl_chap_end_slot_name("ch_end", ctx_a, 2) !=
+                _tl_chap_end_slot_name("ch_end", ctx_b, 2))
+
+    def test_hashed_label_in_slot(self):
+        ctx = [("q", 0)]
+        slot = _tl_chap_end_slot_name("my_label", ctx, 1)
+        assert "my_label" in slot
+
+    def test_hashed_prefix(self):
+        ctx = [("q", 0)]
+        slot = _tl_chap_end_slot_name("lbl", ctx, 1)
+        assert slot.startswith("_ch_chap_lbl_")
+
 
 class TestNodeThumb:
     def test_returns_thumb_bytes_when_present(self):

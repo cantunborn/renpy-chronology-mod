@@ -439,14 +439,23 @@ init python:
 
 
     def _tl_test_chap_end_slot_name(r):
-        """Chapter-end save slot names follow the _ch_chap_{label} convention."""
+        """Chapter-end save slot names include label and context hash."""
         s = "chap_end_slot_name"
-        r.check(s, "prologue label",
-            "_ch_chap_intro_consequences" == "_ch_chap_{}".format("intro_consequences"))
+        import hashlib as _hl
+        _ctx = [("q", 0), ("r", 1)]
+        _ai  = 2
+        _h6  = _hl.md5(repr(tuple(_ctx[:_ai])).encode("utf-8")).hexdigest()[:6]
+        _expected = "_ch_chap_intro_consequences_{}".format(_h6)
+        r.check(s, "hashed slot format",
+            _expected.startswith("_ch_chap_intro_consequences_"))
         r.check(s, "prefix correct",
-            "_ch_chap_any_label".startswith("_ch_chap_"))
-        r.check(s, "different labels → different slots",
-            "_ch_chap_label_a" != "_ch_chap_label_b")
+            _expected.startswith("_ch_chap_"))
+        _ctx2 = [("q", 0), ("r", 0)]
+        _h6b  = _hl.md5(repr(tuple(_ctx2[:_ai])).encode("utf-8")).hexdigest()[:6]
+        r.check(s, "different context same label -> different hash",
+            _h6 != _h6b)
+        r.check(s, "same context -> same hash",
+            _hl.md5(repr(tuple(_ctx[:_ai])).encode("utf-8")).hexdigest()[:6] == _h6)
 
 
     def _tl_test_shadow_path_store_defaults(r):

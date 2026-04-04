@@ -119,8 +119,12 @@ def _tl_rollback_timeline(history, context, markers, label, chapters):
         [m for m in markers if m["after_index"] <= ai],
     )
 
-def _tl_chap_end_slot_name(label):
+def _tl_chap_end_slot_name(label, context=None, after_index=None):
     """Return the save-slot name for a chapter-end checkpoint."""
+    if context is not None and after_index is not None:
+        import hashlib
+        h6 = hashlib.md5(repr(tuple(context[:after_index])).encode("utf-8")).hexdigest()[:6]
+        return "_ch_chap_{}_{}".format(label, h6)
     return "_ch_chap_{}".format(label)
 
 def _tl_node_thumb(node, cache):
