@@ -366,8 +366,16 @@ init python:
             _lbl = store._tl_pending_chap_end_save
             store._tl_pending_chap_end_save = None
             try:
-                renpy.save("_ch_chap_{}".format(_lbl))
-                _tl_log("TL chapter-end save: _ch_chap_{}".format(_lbl))
+                _ai = next((m["after_index"] for m in store._tl_chapter_markers if m["end_label"] == _lbl), None)
+                if _ai is not None:
+                    _h6 = _tl_hashlib.md5(
+                        repr(tuple(store._tl_context[:_ai])).encode("utf-8")
+                    ).hexdigest()[:6]
+                    _chap_slot = "_ch_chap_{}_{}".format(_lbl, _h6)
+                else:
+                    _chap_slot = "_ch_chap_{}".format(_lbl)  ## fallback: no marker yet
+                renpy.save(_chap_slot)
+                _tl_log("TL chapter-end save: {}".format(_chap_slot))
             except Exception as e:
                 _tl_log("TL ERROR chapter-end save failed: {}".format(e))
 

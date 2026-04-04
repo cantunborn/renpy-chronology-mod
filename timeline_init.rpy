@@ -62,7 +62,13 @@ init -2 python:
 
             ## Prefer loading the chapter-end save (captures all state cleanly)
             import os as _os
-            _slot = "_ch_chap_{}".format(label)
+            _marker = next((m for m in store._tl_chapter_markers if m["end_label"] == label), None)
+            if _marker is not None:
+                _ai = _marker["after_index"]
+                _h6 = _tl_hashlib.md5(repr(tuple(store._tl_context[:_ai])).encode("utf-8")).hexdigest()[:6]
+                _slot = "_ch_chap_{}_{}".format(label, _h6)
+            else:
+                _slot = "_ch_chap_{}".format(label)  ## fallback
             _sd   = renpy.config.savedir
             _exists = (
                 _os.path.exists(_os.path.join(_sd, "{}-LT1.save".format(_slot))) or
