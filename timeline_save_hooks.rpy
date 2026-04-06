@@ -72,8 +72,7 @@ init python:
         _store._tl_modal_node            = None
         _store._tl_ast_ready             = False
         _store._tl_ast_map               = {}
-        _store._tl_pending_chap_end_save = None
-        _store._tl_chap_end_slot         = ""
+        _store._tl_chap_end_slot = ""
         _tl_log("TL: post-load validation complete ({} nodes)".format(
             len(_store._tl_history)))
 

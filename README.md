@@ -117,7 +117,7 @@ Core state and utilities. Runs at `init -2` (before hooks).
 
 - Store variables (saved with game): `_tl_history`, `_tl_context`, `_tl_branch_id`, `_tl_node_count`, `_tl_chapter_markers`, `_tl_shadow_path`
 - Persistent variables: `_tl_replaying`, `_tl_replay_target`, `_tl_replay_path`, `_tl_recovery_slot`, `_tl_thumb_cache`, `_tl_prev_thumb`, `_tl_pending_shadow_path` (transit only — staged in `_tl_begin_jump`, transferred to store in `_tl_on_load`)
-- Transient (not saved): `_tl_pending_chap_end_save`, `_tl_chap_end_slot`, `_tl_label_jump`
+- Transient (not saved): `_tl_chap_end_slot`, `_tl_label_jump`
 - Constants: `TL_SAVE_EVERY` (10), `TL_DENSE_SAVES` (5), `TL_THUMB_CACHE_MAX` (500)
 - `_tl_save_slot(index, context)` — deterministic save slot name: `_ch_NNNN_HHHHHH`
 - `_tl_should_save(idx)` — dense saves for first 5 nodes, sparse every 10 after
@@ -142,8 +142,8 @@ Menu interception and save callbacks. Runs at `init -1`.
 - `_tl_record_before(items)` — fires before each menu: refreshes early save, creates node dict with thumbnail and AST key, handles replay reuse
 - `_tl_record_after(node, chosen_label)` — fires after choice: updates `chosen_index`, extends `_tl_context`, queues deferred save
 - `_tl_store_wrapper` — replay interception: at target node, auto-picks option, exits skip mode, stamps `node["_shadow_orig_chosen"]` if the chosen option differs from the pre-jump choice (looked up from `persistent._tl_replay_path`); at intermediate nodes, auto-picks from stored replay path; calls `value()` (not `value.value`) so `ChoiceReturn.__call__` records the choice to `persistent._chosen` and dots clear after replay; in normal flow, calls `_tl_consume_shadow_path` to consume entries on match, stamps `_shadow_orig_chosen` on the node when diverged
-- `_tl_interact_callback` — deferred save trigger: fires after each interaction; writes choice checkpoint if `_tl_should_save(idx)`; also writes `_ch_chap_{label}_{hash}` chapter-end save if `_tl_pending_chap_end_save` is set (hash = MD5[:6] of `_tl_context[:after_index]`, scoping the save to this playthrough's choice path)
-- `_tl_chapter_label_cb` — registered via `config.label_callbacks`; fires when any chapter end label is reached; records `{chapter_name, end_label, after_index}` to `_tl_chapter_markers`, sets `chapter_end` on the last history node, queues chapter-end save; deduplicates on `(chapter_name, after_index)` pair
+- `_tl_interact_callback` — deferred save trigger: fires after each interaction; writes choice checkpoint if `_tl_should_save(idx)`
+- `_tl_chapter_label_cb` — registered via `config.label_callbacks`; fires when any chapter end label is reached; records `{chapter_name, end_label, after_index}` to `_tl_chapter_markers`, sets `chapter_end` on the last history node, then immediately writes `_ch_chap_{label}_{hash}` if it doesn't already exist on disk (label callbacks fire between interactions so `renpy.save()` is safe — deferring to the next interact would overshoot into a following menu); deduplicates on `(chapter_name, after_index)` pair
 - `_tl_on_game_start` — writes `_ch_start` save at game start (ultimate fallback for jumping to node 0)
 - `_tl_on_load` — resumes skip mode on load if mid-replay; writes `_ch_start` if missing
 

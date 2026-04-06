@@ -362,22 +362,6 @@ init python:
                     store._tl_early_save_idx = idx
                 except Exception as e:
                     _tl_log("TL ERROR deferred save failed idx={}: {}".format(idx, e))
-        if store._tl_pending_chap_end_save:
-            _lbl = store._tl_pending_chap_end_save
-            store._tl_pending_chap_end_save = None
-            try:
-                _ai = next((m["after_index"] for m in store._tl_chapter_markers if m["end_label"] == _lbl), None)
-                if _ai is not None:
-                    _h6 = _tl_hashlib.md5(
-                        repr(tuple(store._tl_context[:_ai])).encode("utf-8")
-                    ).hexdigest()[:6]
-                    _chap_slot = "_ch_chap_{}_{}".format(_lbl, _h6)
-                else:
-                    _chap_slot = "_ch_chap_{}".format(_lbl)  ## fallback: no marker yet
-                renpy.save(_chap_slot)
-                _tl_log("TL chapter-end save: {}".format(_chap_slot))
-            except Exception as e:
-                _tl_log("TL ERROR chapter-end save failed: {}".format(e))
 
     config.start_callbacks.append(_tl_on_game_start)
     config.after_load_callbacks.append(_tl_on_load)
@@ -405,6 +389,27 @@ init python:
             ## Mark the last history node — ties divider position to a specific node
             if store._tl_history:
                 store._tl_history[-1]["chapter_end"] = chapter
-            store._tl_pending_chap_end_save = label_name  ## save at next interaction
+            ## Save immediately — label callbacks fire between interactions so renpy.save()
+            ## is safe here. Deferring to _tl_interact_callback would write at the START
+            ## of the next interaction, overshooting into a menu if no dialog follows first.
+            ## Existence check: same slot = same playthrough path already saved, skip write.
+            _h6 = _tl_hashlib.md5(
+                repr(tuple(store._tl_context[:after_idx])).encode("utf-8")
+            ).hexdigest()[:6]
+            _chap_slot = "_ch_chap_{}_{}".format(label_name, _h6)
+            import os as _os
+            _sd = renpy.config.savedir
+            _slot_exists = (
+                _os.path.exists(_os.path.join(_sd, "{}-LT1.save".format(_chap_slot))) or
+                _os.path.exists(_os.path.join(_sd, "{}.save".format(_chap_slot)))
+            )
+            if _slot_exists:
+                _tl_log("TL chapter-end save skipped (exists): {}".format(_chap_slot))
+            else:
+                try:
+                    renpy.save(_chap_slot)
+                    _tl_log("TL chapter-end save: {}".format(_chap_slot))
+                except Exception as e:
+                    _tl_log("TL ERROR chapter-end save failed: {}".format(e))
             _tl_log("TL chapter end: '{}' after_index={}".format(chapter, after_idx))
         config.label_callbacks.append(_tl_chapter_label_cb)

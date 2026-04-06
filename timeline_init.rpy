@@ -117,7 +117,6 @@ default _tl_label_jump  = ""    ## label to jump to via _tl_do_label_jump
 default _tl_chapter_markers = []  ## [{chapter_name, end_label, after_index}] — recorded immediately at chapter end labels
 default _tl_pending_save_index    = None  ## node index to save after next interact
 default _tl_early_save_idx        = None  ## idx of save needing refresh after untracked menus
-default _tl_pending_chap_end_save = None  ## end_label to save at next interact
 default _tl_chap_end_slot         = ""    ## load-slot for chapter-end jump (or "" = jump fallback)
 default _tl_ast_ready  = False  ## True once AST map is built
 default _tl_ast_map    = {}     ## {(filename, line): [seen_fn, ...]} — RenPy 7 fallback

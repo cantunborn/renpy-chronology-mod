@@ -302,9 +302,6 @@ init python:
         import store as _st
         r.check(s, "_tl_chapter_markers is list",
             isinstance(getattr(_st, "_tl_chapter_markers", None), list))
-        r.check(s, "_tl_pending_chap_end_save is None or str",
-            getattr(_st, "_tl_pending_chap_end_save", None) is None or
-            isinstance(getattr(_st, "_tl_pending_chap_end_save", None), str))
         r.check(s, "_tl_chap_end_slot is str",
             isinstance(getattr(_st, "_tl_chap_end_slot", None), str))
         r.check(s, "_tl_label_jump is str",
