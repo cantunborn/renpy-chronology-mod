@@ -148,10 +148,12 @@ init -2 python:
         h6  = _tl_hashlib.md5(raw.encode("utf-8")).hexdigest()[:6]
         return "_ch_{:04d}_{}".format(node_index, h6)
 
-    def _tl_find_nearest_save(target_index, context):
+    def _tl_find_nearest_save(target_index, context, chap_candidates=None):
         """
         Find the chronology save slot with the highest index <= target_index
         that shares the same path prefix as context.
+        chap_candidates: optional list of (after_index, slot_name) from chapter-end
+        saves, pre-validated by the caller.
         Returns slot name (without extension) or None.
         """
         import os as _os
@@ -162,7 +164,7 @@ init -2 python:
             for fname in _os.listdir(save_dir):
                 if not fname.startswith("_ch_"):
                     continue
-                if "recovery" in fname or "start" in fname:
+                if "recovery" in fname or "start" in fname or "chap" in fname:
                     continue
                 name  = fname.replace("-LT1.save", "").replace(".save", "")
                 parts = name.split("_")
@@ -184,6 +186,12 @@ init -2 python:
                     best_slot  = name
         except Exception as e:
             _tl_log("TL find_nearest_save error: {}".format(e))
+
+        ## Fold in chapter-end saves — may be closer to target than any checkpoint
+        for chap_idx, chap_slot in (chap_candidates or []):
+            if chap_idx <= target_index and chap_idx > best_index:
+                best_index = chap_idx
+                best_slot  = chap_slot
 
         if best_slot is None:
             import os as _os2
@@ -427,7 +435,23 @@ init -2 python:
             renpy.save_persistent()
 
             ## ── Save+skip ────────────────────────────────────────────────────
-            nearest = _tl_find_nearest_save(node_index - 1, list(_tl_context))
+            ## Build chapter-end save candidates: markers before target, hash-validated,
+            ## existing on disk. Passed to _tl_find_nearest_save so chapter-end saves
+            ## can serve as jump checkpoints when closer than a regular checkpoint.
+            import os as _os
+            _sd = renpy.config.savedir
+            _chap_candidates = []
+            for _m in store._tl_chapter_markers:
+                _ai = _m["after_index"]
+                if _ai > node_index - 1:
+                    continue
+                _h6 = _tl_hashlib.md5(repr(tuple(store._tl_context[:_ai])).encode("utf-8")).hexdigest()[:6]
+                _cs = "_ch_chap_{}_{}".format(_m["end_label"], _h6)
+                if (_os.path.exists(_os.path.join(_sd, "{}-LT1.save".format(_cs))) or
+                        _os.path.exists(_os.path.join(_sd, "{}.save".format(_cs)))):
+                    _chap_candidates.append((_ai, _cs))
+
+            nearest = _tl_find_nearest_save(node_index - 1, list(_tl_context), _chap_candidates)
 
             if nearest is not None:
                 _tl_log("TL jump: loading save={}".format(nearest))

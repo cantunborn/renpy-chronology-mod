@@ -8,7 +8,7 @@ def _tl_save_slot(node_index, context):
     h6  = _tl_hashlib.md5(raw.encode("utf-8")).hexdigest()[:6]
     return "_ch_{:04d}_{}".format(node_index, h6)
 
-def _tl_find_nearest_save(target_index, context, save_dir, start_exists=False):
+def _tl_find_nearest_save(target_index, context, save_dir, start_exists=False, chap_candidates=None):
     """Testable version with injected save_dir and start_exists flag."""
     best_index = -1
     best_slot  = None
@@ -16,7 +16,7 @@ def _tl_find_nearest_save(target_index, context, save_dir, start_exists=False):
         for fname in os.listdir(save_dir):
             if not fname.startswith("_ch_"):
                 continue
-            if "recovery" in fname or "start" in fname:
+            if "recovery" in fname or "start" in fname or "chap" in fname:
                 continue
             name  = fname.replace("-LT1.save", "").replace(".save", "")
             parts = name.split("_")
@@ -37,6 +37,11 @@ def _tl_find_nearest_save(target_index, context, save_dir, start_exists=False):
                 best_slot  = name
     except Exception as e:
         pass
+
+    for chap_idx, chap_slot in (chap_candidates or []):
+        if chap_idx <= target_index and chap_idx > best_index:
+            best_index = chap_idx
+            best_slot  = chap_slot
 
     if best_slot is None and start_exists:
         best_slot = "_ch_start"

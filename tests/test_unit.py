@@ -161,6 +161,40 @@ class TestFindNearestSave:
             result = _tl_find_nearest_save(2, ctx_search, d)
             assert result is None
 
+    def test_chap_candidate_beats_lower_checkpoint(self):
+        """Chapter-end save at index 5 should beat checkpoint at index 2."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0), ("B", 0), ("C", 0), ("D", 0), ("E", 0), ("F", 0)]
+            make_save_files(d, [(2, ctx[:3])])
+            result = _tl_find_nearest_save(7, ctx, d,
+                chap_candidates=[(5, "_ch_chap_end_abc123")])
+            assert result == "_ch_chap_end_abc123"
+
+    def test_chap_candidate_ignored_above_target(self):
+        """Chapter-end save above target should be ignored."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0), ("B", 0), ("C", 0)]
+            make_save_files(d, [(0, ctx[:1])])
+            result = _tl_find_nearest_save(2, ctx, d,
+                chap_candidates=[(5, "_ch_chap_end_abc123")])
+            assert result == _tl_save_slot(0, ctx[:1])
+
+    def test_chap_candidate_used_when_no_checkpoint(self):
+        """Chapter-end save used as sole candidate when no checkpoints match."""
+        with tempfile.TemporaryDirectory() as d:
+            result = _tl_find_nearest_save(10, [], d,
+                chap_candidates=[(8, "_ch_chap_myend_deadbe")])
+            assert result == "_ch_chap_myend_deadbe"
+
+    def test_checkpoint_beats_lower_chap_candidate(self):
+        """Checkpoint at index 9 should beat chapter-end save at index 5."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)] * 10
+            make_save_files(d, [(9, ctx[:10])])
+            result = _tl_find_nearest_save(10, ctx, d,
+                chap_candidates=[(5, "_ch_chap_end_abc123")])
+            assert result == _tl_save_slot(9, ctx[:10])
+
 
 # =============================================================================
 # _tl_validate_history
