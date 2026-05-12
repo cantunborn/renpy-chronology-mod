@@ -6,14 +6,14 @@
 ##   renpy-chronology-mod/
 ##     timeline_tests.rpy          ← this file (must be here for RenPy to load)
 ##     tests/
-##       timeline_init_latest.py   ← pure Python extraction of init logic
-##       test_unit.py              ← run with: python3 test_unit.py
+##       conftest.py               ← RenPy stub + .rpy loader (pytest)
+##       test_*.py                 ← run with: python3 -m pytest tests/ -q
 ##
 ## Results are written to renpy-chronology-mod/debug.txt via _tl_log().
 ## A toast notification shows pass/fail count in-game.
 ##
 ## Tests RenPy-dependent behaviour that can't be tested outside the engine:
-##   - menu hook wiring (_tl_store_wrapper / _tl_exports_wrapper)
+##   - menu hook wiring (_tl_record_before / _tl_record_after)
 ##   - thumbnail capture
 ##   - save/load round-trip
 ##   - cache read/write
@@ -70,17 +70,24 @@ init python:
             isinstance(persistent._tl_thumb_cache, dict))
         r.check(s, "_tl_replaying default False",
             persistent._tl_replaying == False)
+        r.check(s, "_tl_menu_scene_map is dict",
+            isinstance(persistent._tl_menu_scene_map, dict))
+        r.check(s, "_tl_asset_thumb_cache is dict",
+            isinstance(persistent._tl_asset_thumb_cache, dict))
 
 
     def _tl_test_store_defaults(r):
         """Store defaults exist and have correct types."""
         s = "store_defaults"
-        r.check(s, "_tl_history is list",       isinstance(_tl_history, list))
-        r.check(s, "_tl_context is list",       isinstance(_tl_context, list))
-        r.check(s, "_tl_node_count is int",     isinstance(_tl_node_count, int))
-        r.check(s, "_tl_branch_id is str",      isinstance(_tl_branch_id, str))
-        r.check(s, "_tl_modal_node is None",    _tl_modal_node is None)
-        r.check(s, "_tl_load_slot is str",      isinstance(_tl_load_slot, str))
+        r.check(s, "_tl_history is list",              isinstance(_tl_history, list))
+        r.check(s, "_tl_context is list",              isinstance(_tl_context, list))
+        r.check(s, "_tl_node_count is int",            isinstance(_tl_node_count, int))
+        r.check(s, "_tl_branch_id is str",             isinstance(_tl_branch_id, str))
+        r.check(s, "_tl_modal_node is None",           _tl_modal_node is None)
+        r.check(s, "_tl_load_slot is str",             isinstance(_tl_load_slot, str))
+        r.check(s, "_tl_ast_map is dict",              isinstance(_tl_ast_map, dict))
+        r.check(s, "_tl_ghost_nodes is list",          isinstance(_tl_ghost_nodes, list))
+        r.check(s, "_tl_pending_save_index is None",   _tl_pending_save_index is None)
 
 
     def _tl_test_hooks_wired(r):
@@ -186,10 +193,11 @@ init python:
         ]
 
         # Save real state
-        saved_history    = list(_tl_history)
-        saved_count      = _tl_node_count
-        saved_context    = list(_tl_context)
-        saved_replaying  = persistent._tl_replaying
+        saved_history     = list(_tl_history)
+        saved_count       = _tl_node_count
+        saved_context     = list(_tl_context)
+        saved_replaying   = persistent._tl_replaying
+        saved_ghost_nodes = list(getattr(store, "_tl_ghost_nodes", []))
 
         try:
             persistent._tl_replaying = False
@@ -198,8 +206,12 @@ init python:
             store._tl_context    = []
             store._tl_branch_id  = ""
 
+            # Pre-populate ghost nodes so we can verify they are cleared
+            store._tl_ghost_nodes = [{"type": "branch", "dummy": True}]
+
             node = _tl_record_before(fake_items)
 
+            r.check(s, "ghost_nodes cleared on record_before", store._tl_ghost_nodes == [])
             r.check(s, "record_before returns dict",  isinstance(node, dict))
             r.check(s, "node has index 0",            node["index"] == 0)
             r.check(s, "node has 2 options",          len(node["options"]) == 2)
@@ -220,10 +232,11 @@ init python:
             r.check(s, "no exception", False, str(e))
         finally:
             # Restore real state
-            store._tl_history    = saved_history
-            store._tl_node_count = saved_count
-            store._tl_context    = saved_context
+            store._tl_history     = saved_history
+            store._tl_node_count  = saved_count
+            store._tl_context     = saved_context
             persistent._tl_replaying = saved_replaying
+            store._tl_ghost_nodes = saved_ghost_nodes
 
 
     def _tl_test_node_has_new(r):
@@ -609,7 +622,7 @@ init python:
             del node["_shadow_orig_chosen"]
 
             new_sp, div_ci = _tl_consume_shadow_path(
-                _st._tl_shadow_path, node["_location"], node["chosen_index"])
+                _st._tl_shadow_path, node, node["chosen_index"])
 
             if div_ci is not None:
                 node["_shadow_orig_chosen"] = div_ci
@@ -639,7 +652,7 @@ init python:
             node = {"chosen_index": 1, "_location": "loc_target"}
 
             new_sp, div_ci = _tl_consume_shadow_path(
-                _st._tl_shadow_path, node["_location"], node["chosen_index"])
+                _st._tl_shadow_path, node, node["chosen_index"])
 
             r.check(s, "div_ci is None for same choice", div_ci is None)
             r.check(s, "no _shadow_orig_chosen set",
@@ -689,6 +702,166 @@ init python:
             _st._tl_shadow_path = saved_sp
 
 
+    def _tl_test_on_game_start(r):
+        """_tl_on_game_start clears replay state and writes _ch_start."""
+        s = "on_game_start"
+
+        saved_replaying = persistent._tl_replaying
+        saved_target    = persistent._tl_replay_target
+        saved_save      = renpy.save
+        save_calls      = []
+
+        try:
+            persistent._tl_replaying    = True
+            persistent._tl_replay_target = 3
+
+            renpy.save = lambda slot: save_calls.append(slot)
+
+            _tl_on_game_start()
+
+            r.check(s, "replaying cleared",      persistent._tl_replaying is False)
+            r.check(s, "replay_target cleared",  persistent._tl_replay_target is None)
+            r.check(s, "renpy.save called",      len(save_calls) >= 1)
+            r.check(s, "_ch_start saved",        "_ch_start" in save_calls)
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            persistent._tl_replaying    = saved_replaying
+            persistent._tl_replay_target = saved_target
+            renpy.save = saved_save
+
+
+    def _tl_test_on_load(r):
+        """_tl_on_load: stale-state clear and shadow-path transfer branches."""
+        s = "on_load"
+
+        saved_replaying    = persistent._tl_replaying
+        saved_target       = persistent._tl_replay_target
+        saved_pending_sp   = persistent._tl_pending_shadow_path
+        saved_store_sp     = getattr(store, "_tl_shadow_path", None)
+        saved_skipping     = config.skipping
+
+        try:
+            ## Branch 1: stale state — replaying=True, target=None → clears replay
+            persistent._tl_replaying    = True
+            persistent._tl_replay_target = None
+            store._tl_shadow_path        = None
+
+            _tl_on_load()
+
+            r.check(s, "stale: replaying cleared",
+                persistent._tl_replaying is False)
+
+            ## Branch 2: valid replay with pending shadow path
+            persistent._tl_replaying          = True
+            persistent._tl_replay_target       = 1
+            persistent._tl_pending_shadow_path = [{"location": "test.rpy", "chosen_index": 0}]
+            store._tl_shadow_path              = None
+
+            _tl_on_load()
+
+            r.check(s, "shadow: store._tl_shadow_path set",
+                isinstance(store._tl_shadow_path, list) and len(store._tl_shadow_path) == 1)
+            r.check(s, "shadow: pending_shadow_path cleared",
+                persistent._tl_pending_shadow_path is None)
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            persistent._tl_replaying          = saved_replaying
+            persistent._tl_replay_target       = saved_target
+            persistent._tl_pending_shadow_path = saved_pending_sp
+            store._tl_shadow_path              = saved_store_sp
+            config.skipping                    = saved_skipping
+
+
+    def _tl_test_cancel_replay(r):
+        """_tl_cancel_replay clears all persistent replay fields."""
+        s = "cancel_replay"
+
+        saved_replaying  = persistent._tl_replaying
+        saved_target     = persistent._tl_replay_target
+        saved_path       = persistent._tl_replay_path
+        saved_recovery   = persistent._tl_recovery_slot
+        saved_pending_sp = persistent._tl_pending_shadow_path
+
+        try:
+            persistent._tl_replaying          = True
+            persistent._tl_replay_target       = 5
+            persistent._tl_replay_path         = [("q", 0), ("q2", 1)]
+            persistent._tl_recovery_slot       = "_ch_recovery"
+            persistent._tl_pending_shadow_path = [{"location": "a.rpy", "chosen_index": 0}]
+
+            _tl_cancel_replay()
+
+            r.check(s, "replaying cleared",      persistent._tl_replaying is False)
+            r.check(s, "replay_target cleared",  persistent._tl_replay_target is None)
+            r.check(s, "replay_path cleared",    persistent._tl_replay_path is None)
+            r.check(s, "pending_sp cleared",     persistent._tl_pending_shadow_path is None)
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            persistent._tl_replaying          = saved_replaying
+            persistent._tl_replay_target       = saved_target
+            persistent._tl_replay_path         = saved_path
+            persistent._tl_recovery_slot       = saved_recovery
+            persistent._tl_pending_shadow_path = saved_pending_sp
+
+
+    def _tl_test_interact_callback_deferred_save(r):
+        """_tl_interact_callback writes deferred save at pending_save_index; skips during skip mode."""
+        s = "interact_callback_deferred_save"
+
+        saved_pending_idx  = store._tl_pending_save_index
+        saved_context      = list(_tl_context)
+        saved_history      = list(_tl_history)
+        saved_early_idx    = getattr(store, "_tl_early_save_idx", None)
+        saved_skipping     = config.skipping
+        saved_save         = renpy.save
+        save_calls         = []
+
+        try:
+            renpy.save = lambda slot: save_calls.append(slot)
+            config.skipping = False
+
+            store._tl_context = [("Q0", 0), ("Q1", 1), ("Q2", 0)]
+            store._tl_history = [{"index": i, "options": ["A"]} for i in range(3)]
+            store._tl_pending_save_index = 2
+
+            _tl_interact_callback()
+
+            r.check(s, "save was called",
+                len(save_calls) >= 1)
+            r.check(s, "slot is for index 2",
+                any(c.startswith("_ch_0002_") for c in save_calls))
+            r.check(s, "pending_save_index cleared",
+                store._tl_pending_save_index is None)
+            r.check(s, "early_save_idx updated",
+                store._tl_early_save_idx == 2)
+
+            ## Skip-mode: save should NOT fire
+            save_calls[:] = []
+            config.skipping = "fast"
+            store._tl_pending_save_index = 2
+
+            _tl_interact_callback()
+
+            r.check(s, "skip: save not called",      len(save_calls) == 0)
+            r.check(s, "skip: index still set",      store._tl_pending_save_index == 2)
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            store._tl_pending_save_index = saved_pending_idx
+            store._tl_context            = saved_context
+            store._tl_history            = saved_history
+            store._tl_early_save_idx     = saved_early_idx
+            config.skipping              = saved_skipping
+            renpy.save                   = saved_save
+
+
     def _tl_run_tests():
         r = _TLTestResults()
 
@@ -711,6 +884,10 @@ init python:
         _tl_test_shadow_path_consume_and_diverge(r)
         _tl_test_shadow_path_same_choice_no_diverge(r)
         _tl_test_validate_shadow_path_corruption(r)
+        _tl_test_on_game_start(r)
+        _tl_test_on_load(r)
+        _tl_test_cancel_replay(r)
+        _tl_test_interact_callback_deferred_save(r)
 
         # Write results to debug.txt (renpy-chronology-mod/debug.txt via _tl_log)
         _tl_log("=" * 60)

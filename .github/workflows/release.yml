@@ -21,9 +21,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6.0.2
 
-      - name: Run unit tests
-        run: python3 tests/test_unit.py
-
       - name: Build zip
         run: |
           VERSION="${{ github.event.inputs.version }}"
@@ -37,6 +34,8 @@ jobs:
              timeline_tests.rpy \
              "$MOD_DIR/"
           cp -r fonts "$MOD_DIR/fonts"
+          cp -r backend "$MOD_DIR/backend"
+          cp -r ui "$MOD_DIR/ui"
 
           GAME="${{ github.event.inputs.game }}"
           GAME_FILE="${GAME:-sample}"

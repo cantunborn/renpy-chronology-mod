@@ -22,6 +22,8 @@ cp "$REPO_ROOT"/timeline_init.rpy \
    "$REPO_ROOT"/timeline_tests.rpy \
    "$MOD_DIR/"
 cp -r "$REPO_ROOT/fonts" "$MOD_DIR/fonts"
+cp -r "$REPO_ROOT/backend" "$MOD_DIR/backend"
+cp -r "$REPO_ROOT/ui" "$MOD_DIR/ui"
 
 # ── Generate README.txt (strip dev notes, convert markdown) ───────────────────
 python3 - "$REPO_ROOT/README.md" "$MOD_DIR/README.txt" <<'PYEOF'

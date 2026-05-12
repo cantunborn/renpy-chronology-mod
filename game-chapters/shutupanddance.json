@@ -1,0 +1,20 @@
+{
+    "_comment": "SAMPLE — replace with your game's chapters. Map each chapter display name to the RenPy label that marks its end in the script. Keys starting with _ are ignored. Find label names: open the RenPy console (Shift+O) and run: renpy.game.context().current",
+    "_sample_chapter": "sample_chapter_end_label",
+    "Episode 1": "episode_2_begin",
+    "Episode 2": "ep2ch2_beginnig",
+    "Episode 2 - Chapter 2": "ep3ch1_beginning",
+    "Episode 3 - Chapter 1": "ep3ch2_beginning",
+    "Episode 3 - Chapter 2": "ep4ch1_beginning",
+    "Episode 4 - Chapter 1": "ep4ch2_beginning",
+    "Episode 4 - Chapter 2": "ep5_beginning",   
+    "Episode 5": "ep6_beginning",
+    "Episode 6": "episode_7_ch1_begin",   
+    "Episode 7 - Chapter 1": "episode_7_ch2_begin",   
+    "Episode 7 - Chapter 2": "episode_8_begin",   
+    "Episode 8": "ep9ch1_beginning",   
+    "Episode 9 - Chapter 1": "ep9ch2_beginning",   
+    "Episode 9 - Chapter 2": "ep10ch1_beginning",   
+    "Episode 10 - Chapter 1": "ep10ch2_beginning",   
+    "Episode 10 - Chapter 2": "ep11_beginning"  
+}

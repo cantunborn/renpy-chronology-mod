@@ -25,6 +25,7 @@ init python:
         data is corrupt or an unexpected type.
         """
         import store as _store
+        _tl_runtime_cache_store().pop("choice_returns", None)
 
         ## If _tl_history is missing or wrong type, reset to empty list
         history = getattr(_store, "_tl_history", None)
@@ -39,6 +40,9 @@ init python:
                     and "index" in node
                     and "options" in node
                     and isinstance(node["options"], list)):
+                ## Old saves may contain transient runtime-only payloads.
+                node.pop("_state_snapshot", None)
+                node.pop("_choice_returns", None)
                 clean.append(node)
             else:
                 _tl_log("TL: dropping malformed node: {}".format(repr(node)[:80]))
@@ -69,10 +73,12 @@ init python:
             persistent._tl_pending_shadow_path = None
 
         ## Reset transient UI state — never safe to restore across sessions
-        _store._tl_modal_node            = None
-        _store._tl_ast_ready             = False
-        _store._tl_ast_map               = {}
-        _store._tl_chap_end_slot = ""
+        _store._tl_modal_node       = None
+        _store._tl_chap_end_slot    = ""
+        _store._tl_ghost_nodes      = []
+        _store._tl_ghost_highlight  = None
+        ## NOTE: _tl_ast_ready and _tl_ast_map are derived from the
+        ## static game script (never changes between loads) — do NOT reset them here.
         _tl_log("TL: post-load validation complete ({} nodes)".format(
             len(_store._tl_history)))
 
