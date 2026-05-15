@@ -151,6 +151,8 @@ class Python(_TLNode):
             pass
         self.code = _Code()
         self.code.source = source
+    def execute(self):
+        pass
 
 class Jump(_TLNode):
     def __init__(self, target):
@@ -212,6 +214,7 @@ _TLLabelNode  = Label
 # renpy.ast stub — must come after If is defined; used by tl_ghost_logic.rpy
 _renpy_ast_mod = types.ModuleType("renpy.ast")
 _renpy_ast_mod.If = If
+_renpy_ast_mod.Python = Python
 _renpy.ast = _renpy_ast_mod
 sys.modules.setdefault("renpy.ast", _renpy_ast_mod)
 

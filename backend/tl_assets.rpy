@@ -205,11 +205,26 @@ init -2 python:
                 if _path:
                     return _path
 
-            for _attr in ("images",):
+            for _attr in ("images", "children"):
                 _vals = getattr(_obj, _attr, None)
                 if isinstance(_vals, (list, tuple)):
                     for _item in _vals:
                         _path = _walk(_item)
+                        if _path:
+                            return _path
+
+            ## ATL animation: eval the first image expression from the raw ATL block.
+            _atl = getattr(_obj, "atl", None)
+            if _atl is not None:
+                for _stmt in (getattr(_atl, "statements", None) or []):
+                    for _expr_str, _ in (getattr(_stmt, "expressions", None) or []):
+                        try:
+                            _evaled = renpy.python.py_eval(_expr_str)
+                        except Exception:
+                            continue
+                        if _tl_is_supported_thumb_file(_evaled) and renpy.loadable(_evaled):
+                            return _evaled
+                        _path = _walk(_evaled)
                         if _path:
                             return _path
 
