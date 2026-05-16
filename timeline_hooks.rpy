@@ -46,7 +46,7 @@ init -1 python:
             if value is None:
                 if not prompt:
                     prompt = label
-            else:
+            elif value is not False:
                 valid_items.append(label)
 
         if not valid_items:
@@ -121,10 +121,13 @@ init -1 python:
                 _menu_ast = renpy.game.script.namemap.get(location)
                 if _menu_ast is not None and type(_menu_ast).__name__ == "Menu":
                     for _item in _menu_ast.items:
-                        _blk  = _item[2] if len(_item) > 2 else None
-                        _cond = _item[1] if len(_item) > 1 else None
+                        _blk   = _item[2] if len(_item) > 2 else None
+                        _label = _item[0]
+                        _cond  = _item[1] if len(_item) > 1 else None
                         if _blk is None:
                             continue  ## prompt/separator entry — skip
+                        if _label not in valid_items:
+                            continue  ## locked at runtime — skip
                         node["_option_conditions"].append(
                             None if _cond in (None, "True", True) else str(_cond))
         except Exception as _e:
