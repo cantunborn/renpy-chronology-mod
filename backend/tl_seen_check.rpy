@@ -16,9 +16,7 @@ init -2 python:
         while node is not None and hops < max_hops:
             stype = type(node).__name__
             if stype in ("Say", "TranslateSay"):
-                ident = getattr(node, "identifier", None)
-                tr = _translator.lookup_translate(ident) if (_translator and ident) else None
-                return getattr(tr, "name", None) or getattr(node, "name", None)
+                return _tl_say_seen_name(node)
             if stype in ("Jump", "Call", "Return", "Menu"):
                 return None
             node = getattr(node, "next", None)
@@ -26,19 +24,23 @@ init -2 python:
         return None
 
     def _tl_say_seen_name(node):
-        """Resolve the correct _seen_ever key for a Say or TranslateSay node.
+        """Resolve the correct seen key for a Say or TranslateSay node.
 
-        For translated games, _seen_ever is keyed by the TranslateSay node name
-        from the translation file, not the original Say node name. We look up
-        the translation via the translator to get the right key.
+        RenPy 8.5.2+: return identifier string; eval uses renpy.seen_translation().
+        Older RenPy: return node.name tuple; eval checks _seen_ever directly.
+        Translated games: resolve to TranslateSay node for old RenPy fallback.
         """
+        _ident = getattr(node, "identifier", None)
+        if _ident and getattr(renpy, "seen_translation", None):
+            return _ident
+        ## Old RenPy: resolve translator node for translated games, fall back to node.
         try:
             _translator = renpy.game.script.translator
         except Exception:
             _translator = None
-        ident = getattr(node, "identifier", None)
-        tr = _translator.lookup_translate(ident) if (_translator and ident) else None
-        return getattr(tr, "name", None) or getattr(node, "name", None)
+        _tr = _translator.lookup_translate(_ident) if (_translator and _ident) else None
+        _seen_node = _tr if (_tr is not None and not isinstance(_tr, tuple)) else node
+        return getattr(_seen_node, "name", None) or getattr(node, "name", None)
 
     def _tl_follow_jump_seen_name(target, max_hops=30):
         """Follow a Jump/Call target label one hop and return the first Say's
@@ -165,15 +167,23 @@ init -2 python:
     def _tl_eval_seen_fn(seen_fn):
         """Evaluate a seen_fn descriptor tuple against live RenPy state."""
         try:
-            _ever = persistent._seen_ever or {}
             if seen_fn[0] == "say":
-                return bool(seen_fn[1] in _ever)
+                _key = seen_fn[1]
+                if isinstance(_key, str):
+                    return renpy.seen_translation(_key)
+                return bool(_key in (persistent._seen_ever or {}))
             elif seen_fn[0] == "say_range":
-                ## Fast path: first node not seen → definitely unseen.
-                if seen_fn[1] not in _ever:
+                _k1, _k2 = seen_fn[1], seen_fn[2]
+                if isinstance(_k1, str):
+                    ## Fast path: first node not seen → definitely unseen.
+                    if not renpy.seen_translation(_k1):
+                        return False
+                    ## First seen → confirm full traversal via last node.
+                    return renpy.seen_translation(_k2)
+                _ever = persistent._seen_ever or {}
+                if _k1 not in _ever:
                     return False
-                ## First seen → confirm full traversal via last node.
-                return bool(seen_fn[2] in _ever)
+                return bool(_k2 in _ever)
             elif seen_fn[0] == "image":
                 return renpy.seen_image(seen_fn[1])
             elif seen_fn[0] == "label":
@@ -189,9 +199,13 @@ init -2 python:
         try:
             _peek = _tl_option_peek_seen_fn(node, option_index)
             if _peek is not None:
-                return _tl_eval_seen_fn(_peek)
-        except Exception:
-            pass
+                _r = _tl_eval_seen_fn(_peek)
+                if TL_DEBUG_SEEN:
+                    _tl_log("TL opt_seen: node={} opt={} src=peek desc={} result={}".format(
+                        node.get("index"), option_index, _peek, _r))
+                return _r
+        except Exception as _e:
+            _tl_log("TL opt_seen peek_err: node={} opt={} err={}".format(node.get("index"), option_index, _e))
 
         ## Direct lookup in persistent._chosen — the authoritative live dict.
         ## ChoiceReturn writes (location, label) → True when any option is chosen.
@@ -221,26 +235,6 @@ init -2 python:
                 except Exception:
                     pass
 
-        ## AST-map fallback (RenPy seen_ever / seen_label)
-        key  = node.get("ast_key")
-        desc = (_tl_ast_map.get(key, []) if key else [])
-        if option_index < len(desc):
-            try:
-                d = desc[option_index]
-                if d[0] == "say":
-                    _r = d[1] in (persistent._seen_ever or {})
-                    if TL_DEBUG_SEEN:
-                        _tl_log("TL opt_seen: node={} opt={} src=ast_map desc={} result={}".format(
-                            node.get("index"), option_index, d, _r))
-                    return _r
-                elif d[0] == "label":
-                    _r = renpy.seen_label(d[1])
-                    if TL_DEBUG_SEEN:
-                        _tl_log("TL opt_seen: node={} opt={} src=ast_map desc={} result={}".format(
-                            node.get("index"), option_index, d, _r))
-                    return _r
-            except Exception:
-                pass
         if TL_DEBUG_SEEN:
             _tl_log("TL opt_seen: node={} opt={} src=none result=False".format(
                 node.get("index"), option_index))

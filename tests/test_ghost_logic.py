@@ -373,15 +373,18 @@ _python_patched = ns["_tl_python_execute_patched"]
 
 class TestNotifyBranch:
     def setup_method(self):
-        self._seen_ever_saved = ns["persistent"]._seen_ever
+        self._seen_ever_saved       = ns["persistent"]._seen_ever
+        self._seen_translates_saved = ns["persistent"]._seen_translates
         self._show_screen_calls = []
         def _capture_show_screen(name, **kwargs):
             self._show_screen_calls.append((name, kwargs))
         ns["renpy"].show_screen = _capture_show_screen
         self._show_screen_saved = ns["renpy"].show_screen
+        ns["persistent"]._seen_translates = set()
 
     def teardown_method(self):
-        ns["persistent"]._seen_ever = self._seen_ever_saved
+        ns["persistent"]._seen_ever       = self._seen_ever_saved
+        ns["persistent"]._seen_translates = self._seen_translates_saved
         ns["renpy"].show_screen = lambda *a, **kw: None
 
     def _payload(self, seen_fns, taken_index=None):
@@ -389,20 +392,19 @@ class TestNotifyBranch:
                 "conditions": [], "affecting_vars": set()}
 
     def test_all_branches_seen_suppresses(self):
-        ns["persistent"]._seen_ever = {"a": True, "b": True}
+        ns["persistent"]._seen_translates = {"a", "b"}
         run = [self._payload([("say", "a"), ("say", "b")], taken_index=0)]
         _notify_branch(run, 0, pre_taken_seen=True)
         assert self._show_screen_calls == []
 
     def test_new_path_fires_when_pre_taken_seen_false(self):
-        ns["persistent"]._seen_ever = {}
         run = [self._payload([("say", "x"), ("say", "y")], taken_index=0)]
         _notify_branch(run, 0, pre_taken_seen=False)
         assert len(self._show_screen_calls) == 1
         assert "New path" in self._show_screen_calls[0][1]["message"]
 
     def test_icon_only_when_taken_seen_alternative_locked(self):
-        ns["persistent"]._seen_ever = {"taken": True}
+        ns["persistent"]._seen_translates = {"taken"}
         run = [self._payload([("say", "taken"), ("say", "unseen_alt")], taken_index=0)]
         _notify_branch(run, 0, pre_taken_seen=True)
         assert len(self._show_screen_calls) == 1
@@ -412,7 +414,6 @@ class TestNotifyBranch:
 
     def test_standalone_if_not_taken_alternative_locked_fires_icon_only(self):
         ## taken_glob_i=None (unsatisfied standalone if); alternative is locked → ⎇
-        ns["persistent"]._seen_ever = {}
         run = [self._payload([("say", "locked_branch")], taken_index=None)]
         _notify_branch(run, None, pre_taken_seen=None)
         assert len(self._show_screen_calls) == 1
@@ -420,7 +421,7 @@ class TestNotifyBranch:
         assert "New path" not in self._show_screen_calls[0][1]["message"]
 
     def test_standalone_if_all_alternatives_seen_suppresses(self):
-        ns["persistent"]._seen_ever = {"branch": True}
+        ns["persistent"]._seen_translates = {"branch"}
         run = [self._payload([("say", "branch")], taken_index=None)]
         _notify_branch(run, None, pre_taken_seen=None)
         assert self._show_screen_calls == []
@@ -429,16 +430,15 @@ class TestNotifyBranch:
         ## Two branches with identical tuples; only the one at taken_glob_i is excluded.
         ## If comparison were identity-based, equal tuples would both be "not taken".
         sfn = ("say", "shared_name")
-        ns["persistent"]._seen_ever = {"shared_name": True}
+        ns["persistent"]._seen_translates = {"shared_name"}
         run = [self._payload([sfn, sfn], taken_index=0)]
         _notify_branch(run, 0, pre_taken_seen=True)
         ## Branch 0 is taken (excluded). Branch 1 has same sfn but IS checked.
-        ## seen_ever has the name → both seen → suppress.
+        ## seen_translates has the name → both seen → suppress.
         assert self._show_screen_calls == []
 
     def test_new_path_takes_priority_over_icon_only(self):
         ## pre_taken_seen=False → "New path" returned before ⎇ check
-        ns["persistent"]._seen_ever = {}
         run = [self._payload([("say", "new"), ("say", "also_unseen")], taken_index=0)]
         _notify_branch(run, 0, pre_taken_seen=False)
         assert len(self._show_screen_calls) == 1

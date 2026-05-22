@@ -50,12 +50,22 @@ init -1 python:
         valid_items = []
         for entry in items:
             label = entry[0]
-            value = entry[2] if len(entry) > 2 else None
-            if value is None:
+            cond  = entry[1] if len(entry) > 1 else None
+            block = entry[2] if len(entry) > 2 else None
+            if block is None:
+                ## No block → caption / prompt entry
                 if not prompt:
                     prompt = label
-            elif value is not False:
+            elif cond in (None, True, "True"):
                 valid_items.append(label)
+            elif cond is False or cond == "False":
+                pass  ## explicitly locked
+            else:
+                try:
+                    if renpy.python.py_eval(cond):
+                        valid_items.append(label)
+                except Exception:
+                    valid_items.append(label)  ## include on eval failure
 
         if not valid_items:
             return None
@@ -107,7 +117,6 @@ init -1 python:
             "ast_key"           : ast_key,
             "_location"         : location,
             "_rollback_id"      : rollback_id,
-            "_option_conditions": [],   ## [condition_str per option] — populated below
         }
         _derived_site = _tl_node_menu_site_key(node)
         _tl_log("TL menu enter: node={} ast={} site={} opts={} current_type={}".format(
@@ -120,26 +129,6 @@ init -1 python:
                 and tuple(node["ast_key"]) != tuple(_derived_site)):
             _tl_log("TL menu ast/site mismatch: node={} ast={} site={} loc={}".format(
                 node["index"], node["ast_key"], _derived_site, node.get("_location")))
-
-        ## Extract option conditions from the RenPy AST.
-        ## Only runs when the current script node is directly a Menu node —
-        ## gracefully skipped otherwise.
-        try:
-            if location is not None:
-                _menu_ast = renpy.game.script.namemap.get(location)
-                if _menu_ast is not None and type(_menu_ast).__name__ == "Menu":
-                    for _item in _menu_ast.items:
-                        _blk   = _item[2] if len(_item) > 2 else None
-                        _label = _item[0]
-                        _cond  = _item[1] if len(_item) > 1 else None
-                        if _blk is None:
-                            continue  ## prompt/separator entry — skip
-                        if _label not in valid_items:
-                            continue  ## locked at runtime — skip
-                        node["_option_conditions"].append(
-                            None if _cond in (None, "True", True) else str(_cond))
-        except Exception as _e:
-            _tl_log("TL option_conditions extraction failed: {}".format(_e))
 
         ## Thumbnail: runtime-captured img_name is authoritative.
         ## Persistent menu scene map is the backfill source for older / unresolved menus.

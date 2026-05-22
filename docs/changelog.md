@@ -7,6 +7,30 @@ that is present in the codebase but not yet committed.
 
 ## Unreleased
 
+### Fix: Conditional menu options — node["options"] now contains only available choices
+
+- **`timeline_hooks.rpy`** — `_tl_record_before` now filters options by condition at record time. Prompt detected by `block is None` (entry[2]). Available options: `cond` truthy (`True`, `"True"`, `None`). Locked options: `cond` falsy (`False`, `"False"`) or `py_eval(cond_str)` returns False. Previously `entry[2]` (an integer AST index, never `False`) caused all options to pass regardless of lock state, misaligning `chosen_index` with the available list.
+- **`timeline_hooks.rpy`** — removed `_option_conditions` field from node dict and the AST re-walk block that populated it.
+- **`ui/tl_cards.rpy`** — removed `[condition_str]` subtitle row from option display.
+- **`timeline_tests.rpy`** — replaced `_tl_test_option_conditions_alignment` with `_tl_test_option_filtering`, covering boolean True/False conditions, string `"True"`/`"False"` conditions, unconditional choices, all-locked menus, and prompt detection.
+
+### Fix: Route chip filtering — hide vars still at declared default value
+
+- **`backend/tl_route_logic.rpy`** — added `Default` AST node walk in `_tl_build_route_index`; captures scalar (`bool`, `int`, `float`, `str`) default values into `store._tl_var_defaults` (store, not persistent — rebuilt each session). In `_tl_build_route_chips`, vars whose current value equals their declared default are hidden unless ghost-highlighted or recently-changed. Non-scalar defaults (Character objects, dicts, etc.) are skipped at eval time to avoid persistence errors.
+
+### Fix: Route chip filtering — remove consumed/if_count hide rules
+
+- **`backend/tl_route_logic.rpy`** — removed `_tl_var_consumed` check and `if_count == 0` hide rule from `_tl_build_route_chips`. Vars now show if assigned and scalar-valued; `val is None` and non-scalar are the only filters. Sort order (ghost/recently-changed first, then `if_count` desc) already pushes low-signal vars down — hiding them by consumed state was dropping vars that still had unseen conditions later in the game.
+
+### Fix: Seen-state compatibility for RenPy 8.5.2 (`config.hash_seen = True`)
+
+- **`backend/tl_seen_check.rpy`** — `_tl_say_seen_name` now version-branches: on RenPy 8.5.2+ (has `renpy.seen_translation`), returns the `node.identifier` string; on older RenPy, resolves through the translator and returns `node.name` tuple. `_tl_eval_seen_fn` dispatches on key type: string → `renpy.seen_translation()`, tuple → `_seen_ever` dict lookup. Fixes dots appearing on seen options in `config.hash_seen = True` games. Added `TL_DEBUG_SEEN`-gated log to the primary peek path result (was invisible before).
+
+### Refactor: Remove dead `_tl_ast_map` fallback
+
+- **`timeline_init.rpy`** — removed `default _tl_ast_map = {}` and the Menu-node walk that built it in `_tl_build_ast_map`. The route and coverage index walks that follow are unaffected.
+- **`backend/tl_seen_check.rpy`** — removed the `ast_map` fallback block from `_tl_option_seen`. It was dead: `_tl_ast_map` and `_tl_live_menu_lookup` drew from the same `namemap`, so the peek path always succeeded when ast_map would have, and `persistent._chosen` covered the remaining cases.
+
 ### Refactor: Remove dead functions `_tl_branch_img` and `_tl_first_scene_img`
 
 - **`backend/tl_ghost_logic.rpy`** — removed `_tl_branch_img` (old single-image branch resolver, superseded by `_collect_branch_imgs`) and its shim `_tl_first_scene_img`. Both had zero callers outside each other. Current image pipeline: `_tl_resolve_cluster_imgs` → `_collect_branch_imgs` → `branch_img_seqs`.

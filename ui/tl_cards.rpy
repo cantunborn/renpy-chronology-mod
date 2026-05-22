@@ -183,8 +183,6 @@ screen tl_card_option_row(node, i, opt, cw, shadow_ci):
     python:
         _tl_show_dot  = not _tl_option_seen(node, i)
         _tl_is_aid    = (shadow_ci is not None and i == shadow_ci)
-        _tl_conds     = node.get("_option_conditions", [])
-        _tl_cond_str  = (_tl_conds[i] if i < len(_tl_conds) else None) or ""
         _tl_opt_count = len(node["options"])
 
     vbox:
@@ -231,17 +229,6 @@ screen tl_card_option_row(node, i, opt, cw, shadow_ci):
                         xmaximum cw - 44
                         yalign 0.5
 
-                if _tl_cond_str:
-                    hbox:
-                        xsize cw - 24
-                        spacing 0
-                        null xsize 22
-                        text "[{}]".format(_tl_cond_str):
-                            style "tl_base"
-                            size TL_SIZE_SUBTITLE
-                            color TL["header_sub"]
-                            xmaximum cw - 46
-                            substitute False
 
         if i < _tl_opt_count - 1:
             frame:

@@ -152,17 +152,15 @@ Route tracker backend: AST index build, chip filtering/ordering, snapshot/diff/f
 - `store._tl_recently_changed_vars` — `set`; vars changed since last menu; cleared at each `_tl_record_before`
 - `store._tl_menu_var_snap` — `{var: value}`; snapshot taken at menu-present time for init-assign detection
 - `store._tl_var_if_seen_keys` — `{var_name: set(ast_key)}`; tracks which If-node AST keys have been executed this session per var; used by `_tl_var_consumed` to determine whether all branches referencing a var have been hit
-
-**Constants:**
-- `_TL_ROUTE_HIGH_THRESHOLD = 5` — consumed vars with `if_count > 5` are always shown (globally significant)
+- `store._tl_var_defaults` — `{var_name: scalar}`; declared default values from `default` AST nodes (scalar only: bool/int/float/str); rebuilt each session; used by `_tl_build_route_chips` to hide vars still at their declared default
 
 **Functions:**
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `_tl_build_route_index` | `(nodes) → None` | Full iterative block walk from Label entry points. Two passes: Python-node (collect var names, numeric detection, domain literals) and If-node (accumulate `if_count`, build seen descriptors per branch). Writes all five persistent keys listed above. |
+| `_tl_build_route_index` | `(nodes) → None` | Full iterative block walk from Label entry points. Three passes: Python-node (collect var names, numeric detection, domain literals), Default-node (capture scalar declared defaults into `store._tl_var_defaults`), and If-node (accumulate `if_count`, build seen descriptors per branch). Writes all five persistent keys listed above plus `store._tl_var_defaults`. |
 | `_tl_var_consumed` | `(var_name) → bool` | True if `len(_tl_var_if_seen_keys[var]) >= _tl_var_if_count[var]` — every If-entry referencing this var has been visited this session. Returns False when `if_count == 0`. |
-| `_tl_build_route_chips` | `() → list[(str, Any)]` | Filter and sort route vars for chip bar display. Hides vars with `if_count == 0`, None values, non-scalar values, and consumed vars below `HIGH_THRESHOLD` that are not highlighted. Sorts highlighted (ghost/recently-changed) vars first by `if_count` desc, then remaining by `if_count` desc. |
+| `_tl_build_route_chips` | `() → list[(str, Any)]` | Filter and sort route vars for chip bar display. Hides vars with None values, non-scalar values, and vars still at their declared default (from `store._tl_var_defaults`) unless ghost-highlighted or recently-changed. Sorts highlighted (ghost/recently-changed) vars first by `if_count` desc, then remaining by `if_count` desc. |
 | `_tl_snapshot_route_vars` | `() → dict` | Returns `{var: getattr(store, var, None)}` for all `persistent._tl_route_var_names`. |
 | `_tl_diff_route_vars` | `(snap) → None` | Compares current store values against snapshot. Skips unchanged and init vars (old was None). Accumulates into `store._tl_pending_var_changes`; keeps original `old_val` if var already pending. Adds changed vars to `_tl_recently_changed_vars`. |
 | `_tl_format_numeric_change` | `(label, old_val, new_val) → str` | Returns `"↑N Label"` or `"↓N Label"`. Omits magnitude when delta is exactly 1. Strips `.0` from integer deltas. Uses DejaVuSans font tags for arrow glyphs. |
@@ -322,7 +320,7 @@ Menu interception, save callbacks, replay wrapper, and ghost card hook. Runs at 
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `_tl_record_before` | `(items) → dict or None` | Fires before each menu: refreshes early save, creates/reuses node with location/AST key/thumbnail/conditions, handles replay reuse; called by menu wrappers. |
+| `_tl_record_before` | `(items) → dict or None` | Fires before each menu: evaluates each item's condition (`entry[1]`) to filter available options into `node["options"]` (prompt detected by `block is None`), creates/reuses node with location/AST key/thumbnail, handles replay reuse; called by menu wrappers. |
 | `_tl_record_after` | `(node, chosen_label=None, chosen_index=None) → None` | Fires after choice: records chosen index (prefers index identity over label), extends `_tl_context`, queues deferred save via `_tl_pending_save_index`. |
 | `_tl_exports_wrapper` | `(items, set=None, args=None, kwargs=None, item_arguments=None) → choice` | Wraps `renpy.exports.menu`; calls `_tl_record_before`, delegates to original, calls `_tl_record_after`. |
 | `_tl_store_wrapper` | `(items) → choice` | Wraps `renpy.store.menu`; handles replay interception (auto-pick at target, skip through path), shadow path match/consume, choice recording. |
@@ -352,7 +350,6 @@ Store/persistent initialization, constants, logging, AST map build, and utility 
 - `_tl_early_save_idx` (default `None`)
 - `_tl_chap_end_slot` (default `""`)
 - `_tl_ast_ready` (default `False`) — True after background AST build completes
-- `_tl_ast_map` (default `{}`) — `{(filename, line): [seen_fn, ...]}` fallback seen map
 - `_tl_shadow_path` (default `None`)
 - `_tl_ghost_nodes` (default `[]`)
 - `_tl_ghost_highlight` (default `None`)
@@ -387,7 +384,7 @@ Store/persistent initialization, constants, logging, AST map build, and utility 
 | `_tl_perf_reset` | `(scope) → float or None` | Clears profiling stats for a scope and returns a new mark. |
 | `_tl_perf_dump` | `(scope, started_at=None) → None` | Logs accumulated profiling stats via `_tl_log`. |
 | `_tl_new_branch_id` | `() → str` | Returns a 12-character UUID hex string for a new branch. |
-| `_tl_build_ast_map` | `() → None` | Scans the game script for Menu nodes on a background thread; builds `_tl_ast_map` and `persistent._tl_menu_scene_map`; sets `_tl_ast_ready = True` when done. |
+| `_tl_build_ast_map` | `() → None` | Entry point for the background AST walk; sets `_tl_ast_ready = True`, then calls `_tl_build_route_index` and `_tl_build_coverage_index`. |
 | `_tl_migrate_img_names` | `() → None` | Stamps `img_name` onto history nodes missing it using `persistent._tl_menu_scene_map`; runs once per load. |
 
 ---

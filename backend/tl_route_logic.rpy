@@ -103,6 +103,31 @@ init -2 python:
         persistent._tl_route_var_names = list(_route_vars)
         _tl_log("TL route index: {} assigned vars".format(len(_route_vars)))
 
+        ## ── Default node walk — capture declared default values ───────────────
+        ## `default varname = expr` creates a Default AST node with .varname and
+        ## .code.bytecode. We eval the bytecode to get the actual default value.
+        ## Only store-namespace defaults; skips vars starting with _.
+        _defaults = {}
+        for _dn in nodes:
+            if type(_dn).__name__ != "Default":
+                continue
+            if getattr(_dn, "store", "store") != "store":
+                continue
+            _vn = getattr(_dn, "varname", None)
+            if not _vn or _vn.startswith("_"):
+                continue
+            _bc = getattr(getattr(_dn, "code", None), "bytecode", None)
+            if _bc is None:
+                continue
+            try:
+                _dv = renpy.python.py_eval_bytecode(_bc)
+            except Exception:
+                continue
+            if isinstance(_dv, (bool, int, float, str)):
+                _defaults[_vn] = _dv
+        store._tl_var_defaults = _defaults
+        _tl_log("TL route index: {} scalar default values captured".format(len(_defaults)))
+
         ## ── If-node condition walk (uses nodes collected above) ───────────────
         ## Counts per If NODE (not per entry) so the runtime seen-key set can be
         ## compared directly: consumed = len(seen_keys) >= if_count.
@@ -182,16 +207,15 @@ init -2 python:
         Return ordered list of (var_name, current_value) chips for the route screen.
 
         Show/hide rules:
-            if_count == 0                          → hide (never gates content)
-            if_count > 0, consumed, count <= HIGH  → hide (player is past all branches)
-            otherwise                              → show
+            val is None or non-scalar → hide
+            otherwise                 → show
 
         Ordering:
             1. Ghost vars (in current ghost nodes), by if_count desc
             2. Non-ghost vars, by if_count desc
         """
-        var_names  = getattr(persistent, "_tl_route_var_names", None) or []
-        if_count   = getattr(persistent, "_tl_var_if_count",    None) or {}
+        var_names   = getattr(persistent, "_tl_route_var_names", None) or []
+        if_count    = getattr(persistent, "_tl_var_if_count",    None) or {}
         ghost_nodes = getattr(store, "_tl_ghost_nodes", [])
 
         ghost_vars = set()
@@ -202,18 +226,17 @@ init -2 python:
         recently_changed = getattr(store, "_tl_recently_changed_vars", None) or set()
         highlighted = ghost_vars | recently_changed
 
+        var_defaults = getattr(store, "_tl_var_defaults", None) or {}
+
         chips = []
         for name in var_names:
-            cnt = if_count.get(name, 0)
-            if cnt == 0:
-                continue   ## never gates content
             val = getattr(store, name, None)
             if val is None:
                 continue
             if not isinstance(val, (bool, int, float, str)):
                 continue
-            if _tl_var_consumed(name) and cnt <= _TL_ROUTE_HIGH_THRESHOLD and name not in highlighted:
-                continue   ## consumed and not globally important; highlighted vars always shown
+            if name in var_defaults and val == var_defaults[name] and name not in highlighted:
+                continue   ## still at declared default, story hasn't touched it
             chips.append((name, val))
 
         chips.sort(key=lambda c: (

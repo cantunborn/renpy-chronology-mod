@@ -225,11 +225,13 @@ class TestBuildRouteChips:
     def setup_method(self):
         self._saved_names     = ns["persistent"]._tl_route_var_names
         self._saved_if_count  = ns["persistent"]._tl_var_if_count
+        self._saved_defaults  = ns["store"]._tl_var_defaults
         self._saved_seen_keys = getattr(ns["store"], "_tl_var_if_seen_keys", {})
         self._saved_ghost     = getattr(ns["store"], "_tl_ghost_nodes", [])
         self._saved_rcv       = getattr(ns["store"], "_tl_recently_changed_vars", set())
         ns["persistent"]._tl_route_var_names = []
         ns["persistent"]._tl_var_if_count    = {}
+        ns["store"]._tl_var_defaults    = {}
         ns["store"]._tl_var_if_seen_keys      = {}
         ns["store"]._tl_ghost_nodes           = []
         ns["store"]._tl_recently_changed_vars = set()
@@ -237,6 +239,7 @@ class TestBuildRouteChips:
     def teardown_method(self):
         ns["persistent"]._tl_route_var_names = self._saved_names
         ns["persistent"]._tl_var_if_count    = self._saved_if_count
+        ns["store"]._tl_var_defaults    = self._saved_defaults
         ns["store"]._tl_var_if_seen_keys      = self._saved_seen_keys
         ns["store"]._tl_ghost_nodes           = self._saved_ghost
         ns["store"]._tl_recently_changed_vars = self._saved_rcv
@@ -255,55 +258,75 @@ class TestBuildRouteChips:
         if seen_keys is not None:
             ns["store"]._tl_var_if_seen_keys[var] = seen_keys
 
-    def test_var_with_if_count_zero_excluded(self):
-        ns["persistent"]._tl_route_var_names = ["myvar"]
-        ns["persistent"]._tl_var_if_count = {}   ## not present → 0
-        setattr(ns["store"], "myvar", "hello")
-        chips = _build_chips()
-        assert not any(c[0] == "myvar" for c in chips)
-
     def test_var_with_none_value_excluded(self):
         ns["persistent"]._tl_route_var_names = ["myvar"]
-        ns["persistent"]._tl_var_if_count = {"myvar": 2}
         if hasattr(ns["store"], "myvar"):
             delattr(ns["store"], "myvar")
         chips = _build_chips()
         assert not any(c[0] == "myvar" for c in chips)
 
     def test_var_with_list_value_excluded(self):
-        self._setup("myvar", [1, 2, 3], if_count=2)
+        self._setup("myvar", [1, 2, 3])
         chips = _build_chips()
         assert not any(c[0] == "myvar" for c in chips)
 
-    def test_consumed_low_count_var_excluded(self):
-        ## Consumed + if_count <= 5 → hidden
-        self._setup("route_id", "romance", if_count=2,
-                    seen_keys={("f.rpy", 1), ("f.rpy", 2)})
+    def test_var_at_default_hidden(self):
+        ## Still at declared default → not yet touched by the story
+        ns["store"]._tl_var_defaults = {"affection": 0}
+        self._setup("affection", 0)
         chips = _build_chips()
-        assert not any(c[0] == "route_id" for c in chips)
+        assert not any(c[0] == "affection" for c in chips)
 
-    def test_consumed_high_count_var_shown(self):
-        ## Consumed + if_count > 5 → always shown (globally important)
-        self._setup("perk", "combat", if_count=6,
-                    seen_keys={("f.rpy", i) for i in range(6)})
-        chips = _build_chips()
-        assert any(c[0] == "perk" for c in chips)
-
-    def test_unconsumed_var_shown(self):
-        self._setup("affection", 4, if_count=3, seen_keys={("f.rpy", 1)})  ## only 1 of 3 seen
+    def test_var_changed_from_default_shown(self):
+        ## Value differs from default → story has touched it
+        ns["store"]._tl_var_defaults = {"affection": 0}
+        self._setup("affection", 3)
         chips = _build_chips()
         assert any(c[0] == "affection" for c in chips)
 
-    def test_ghost_var_shown_even_if_consumed(self):
-        self._setup("trust", "high", if_count=1,
-                    seen_keys={("f.rpy", 1)})  ## consumed
+    def test_var_no_default_shown_when_assigned(self):
+        ## No default declaration → show whenever non-None
+        self._setup("route_id", "romance")
+        chips = _build_chips()
+        assert any(c[0] == "route_id" for c in chips)
+
+    def test_var_at_default_but_ghost_highlighted_shown(self):
+        ## At default value but highlighted as ghost var → still shown
+        ns["store"]._tl_var_defaults = {"trust": "low"}
+        self._setup("trust", "low")
         ns["store"]._tl_ghost_nodes = [{"affecting_vars": ["trust"]}]
         chips = _build_chips()
         assert any(c[0] == "trust" for c in chips)
 
-    def test_recently_changed_var_shown_even_if_consumed(self):
-        self._setup("affection", 3, if_count=1,
-                    seen_keys={("f.rpy", 1)})  ## consumed
+    def test_var_at_default_but_recently_changed_shown(self):
+        ## At default value but recently changed → still shown
+        ns["store"]._tl_var_defaults = {"affection": 0}
+        self._setup("affection", 0)
+        ns["store"]._tl_recently_changed_vars = {"affection"}
+        chips = _build_chips()
+        assert any(c[0] == "affection" for c in chips)
+
+    def test_var_with_if_count_zero_still_shown(self):
+        ## if_count == 0 no longer hides — var with a value always shows
+        ns["persistent"]._tl_route_var_names = ["myvar"]
+        ns["persistent"]._tl_var_if_count = {}
+        setattr(ns["store"], "myvar", "hello")
+        chips = _build_chips()
+        assert any(c[0] == "myvar" for c in chips)
+
+    def test_assigned_var_always_shown(self):
+        self._setup("route_id", "romance", if_count=2)
+        chips = _build_chips()
+        assert any(c[0] == "route_id" for c in chips)
+
+    def test_ghost_var_shown(self):
+        self._setup("trust", "high", if_count=1)
+        ns["store"]._tl_ghost_nodes = [{"affecting_vars": ["trust"]}]
+        chips = _build_chips()
+        assert any(c[0] == "trust" for c in chips)
+
+    def test_recently_changed_var_shown(self):
+        self._setup("affection", 3, if_count=1)
         ns["store"]._tl_recently_changed_vars = {"affection"}
         chips = _build_chips()
         assert any(c[0] == "affection" for c in chips)

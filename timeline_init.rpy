@@ -152,7 +152,6 @@ default _tl_pending_save_index    = None  ## node index to save after next inter
 default _tl_early_save_idx        = None  ## idx of save needing refresh after untracked menus
 default _tl_chap_end_slot         = ""    ## load-slot for chapter-end jump (or "" = jump fallback)
 default _tl_ast_ready  = False  ## True once AST map is built
-default _tl_ast_map    = {}     ## {(filename, line): [seen_fn, ...]} — RenPy 7 fallback
 default _tl_shadow_path = None  ## [{location, chosen_index}] replay-aid hints, or None
 default _tl_ghost_nodes      = []    ## ghost dicts for If branches in current scene segment
 default _tl_ghost_highlight  = None  ## (ast_key, branch_index) or None — selected branch row
@@ -160,6 +159,7 @@ default _tl_pending_var_changes = {} ## {var_name: (old_val, new_val)} — flush
 default _tl_menu_var_snap = None    ## pre-menu route var snapshot for next-menu var-change attribution
 default _tl_recently_changed_vars = set()  ## vars changed since last menu; cleared at _tl_record_before
 default _tl_var_if_seen_keys = {}   ## {var_name: set(ast_keys)} — If nodes executed this session
+default _tl_var_defaults     = {}   ## {var_name: scalar} — declared default values from `default` stmts
 
 ## Replay state — stored in persistent so it survives a save/load cycle.
 init python:
@@ -173,6 +173,7 @@ init python:
         persistent._tl_img_movie_cache = {}
     if not hasattr(persistent, "_tl_pending_shadow_path"):
         persistent._tl_pending_shadow_path = None
+
     if persistent._tl_scene_map_version is None or persistent._tl_scene_map_version < 3:
         persistent._tl_menu_scene_map = {}
         persistent._tl_scene_map_version = 3
@@ -200,24 +201,7 @@ init -2 python:
             return
 
         _tl_log("TL AST: scanning {} named nodes".format(len(nodes)))
-        ast_map = {}
-
-        for node in nodes:
-            if type(node).__name__ != "Menu":
-                continue
-            key      = (node.filename, node.linenumber)
-            seen_fns = []
-            for item in node.items:
-                block = item[2] if len(item) > 2 else None
-                if not block:
-                    continue
-                seen_fns.append(_tl_make_seen_fn(block))
-            if seen_fns:
-                ast_map[key] = seen_fns
-
-        store._tl_ast_map   = ast_map
         store._tl_ast_ready = True
-        _tl_log("TL AST done: {} menus".format(len(ast_map)))
 
         _tl_build_route_index(nodes)
         _tl_build_coverage_index(nodes)

@@ -33,6 +33,7 @@ _persistent = types.SimpleNamespace(
     _tl_scene_map_version=3,
     _tl_recovery_slot=None,
     _seen_ever={},
+    _seen_translates=set(),
     _chosen={},
     # route tracker keys
     _tl_route_var_names=[],
@@ -86,6 +87,7 @@ _renpy.notify = _noop
 _renpy.show_screen = _noop
 _renpy.save_persistent = _noop
 _renpy.seen_label = lambda label: False
+_renpy.seen_translation = lambda tlid: tlid in (_persistent._seen_translates or set())
 _renpy.screenshot_to_bytes = lambda *a, **kw: b""
 _renpy.loadable = lambda f: False
 _renpy.version_tuple = (8, 1, 3, 0, 0)
@@ -279,6 +281,8 @@ _rpy_ns.setdefault("_tl_pending_var_changes", {})
 _rpy_ns.setdefault("_tl_recently_changed_vars", set())
 _rpy_ns.setdefault("_tl_menu_var_snap", None)
 _rpy_ns.setdefault("_tl_var_if_seen_keys", {})
+_rpy_ns.setdefault("_tl_var_defaults", {})
+_store._tl_var_defaults = {}
 
 load_rpy("timeline_hooks.rpy", _rpy_ns)
 

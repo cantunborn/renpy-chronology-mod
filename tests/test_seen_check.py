@@ -98,27 +98,42 @@ class TestNodeHasNew:
 class TestEvalSeenFn:
     def setup_method(self):
         _p = _rpy_ns["persistent"]
-        self._seen_ever_saved  = _p._seen_ever
-        self._seen_label_saved = _rpy_ns["renpy"].seen_label
+        self._seen_ever_saved       = _p._seen_ever
+        self._seen_translates_saved = _p._seen_translates
+        self._seen_label_saved      = _rpy_ns["renpy"].seen_label
+        _p._seen_translates = set()
 
     def teardown_method(self):
-        _rpy_ns["persistent"]._seen_ever = self._seen_ever_saved
-        _rpy_ns["renpy"].seen_label      = self._seen_label_saved
+        _p = _rpy_ns["persistent"]
+        _p._seen_ever       = self._seen_ever_saved
+        _p._seen_translates = self._seen_translates_saved
+        _rpy_ns["renpy"].seen_label = self._seen_label_saved
 
     def test_never(self):
         assert _tl_eval_seen_fn(("never",)) == False
 
-    def test_say_seen(self):
-        _rpy_ns["persistent"]._seen_ever = {"abc123": True}
+    ## String keys → renpy.seen_translation() (new RenPy path)
+    def test_say_seen_string_key(self):
+        _rpy_ns["persistent"]._seen_translates = {"abc123"}
         assert _tl_eval_seen_fn(("say", "abc123")) == True
 
-    def test_say_unseen(self):
-        _rpy_ns["persistent"]._seen_ever = {"xyz": True}
+    def test_say_unseen_string_key(self):
+        _rpy_ns["persistent"]._seen_translates = {"xyz"}
         assert _tl_eval_seen_fn(("say", "abc123")) == False
 
-    def test_say_no_seen_ever(self):
+    ## Tuple keys → _seen_ever dict (old RenPy path)
+    def test_say_seen_tuple_key(self):
+        _key = ("script.rpy", 42, "hash")
+        _rpy_ns["persistent"]._seen_ever = {_key: True}
+        assert _tl_eval_seen_fn(("say", _key)) == True
+
+    def test_say_unseen_tuple_key(self):
+        _rpy_ns["persistent"]._seen_ever = {}
+        assert _tl_eval_seen_fn(("say", ("script.rpy", 42, "hash"))) == False
+
+    def test_say_no_seen_ever_tuple_key(self):
         _rpy_ns["persistent"]._seen_ever = None
-        assert _tl_eval_seen_fn(("say", "abc123")) == False
+        assert _tl_eval_seen_fn(("say", ("script.rpy", 1, "x"))) == False
 
     def test_label_seen(self):
         _rpy_ns["renpy"].seen_label = lambda l: l == "mom_crown_r"
@@ -203,27 +218,49 @@ class TestMakeSeenFn:
 
 class TestSaySeenName:
     def setup_method(self):
-        self._translator = _rpy_ns["renpy"].game.script.translator
-        self._orig_map = dict(self._translator._map)
+        self._translator    = _rpy_ns["renpy"].game.script.translator
+        self._orig_map      = dict(self._translator._map)
+        self._seen_tl_saved = _rpy_ns["renpy"].seen_translation
 
     def teardown_method(self):
-        self._translator._map = self._orig_map
+        self._translator._map              = self._orig_map
+        _rpy_ns["renpy"].seen_translation  = self._seen_tl_saved
 
+    def _remove_seen_translation(self):
+        """Simulate old RenPy that lacks renpy.seen_translation."""
+        try:
+            del _rpy_ns["renpy"].seen_translation
+        except AttributeError:
+            pass
+
+    ## New RenPy (seen_translation present): identifier returned directly
     def test_say_with_no_identifier_returns_node_name(self):
         node = Say("mc_name")
         assert _tl_say_seen_name(node) == "mc_name"
 
-    def test_say_with_identifier_no_translation_returns_node_name(self):
+    def test_say_with_identifier_new_renpy_returns_identifier(self):
+        node = Say("mc_name", identifier="id_001")
+        assert _tl_say_seen_name(node) == "id_001"
+
+    def test_translate_say_with_identifier_new_renpy_returns_identifier(self):
+        node = TranslateSay("elin_orig", identifier="id_002")
+        assert _tl_say_seen_name(node) == "id_002"
+
+    ## Old RenPy (no seen_translation): resolve via translator, fall back to node.name
+    def test_old_renpy_identifier_no_translator_entry_returns_node_name(self):
+        self._remove_seen_translation()
         node = Say("mc_name", identifier="id_001")
         assert _tl_say_seen_name(node) == "mc_name"
 
-    def test_say_with_identifier_translation_found_returns_translated_name(self):
+    def test_old_renpy_identifier_translator_entry_returns_translated_name(self):
+        self._remove_seen_translation()
         tr_node = TranslateSay("tl_mc_name", identifier="id_001")
         self._translator._map["id_001"] = tr_node
         node = Say("mc_name", identifier="id_001")
         assert _tl_say_seen_name(node) == "tl_mc_name"
 
-    def test_translate_say_with_translation_uses_translated_name(self):
+    def test_old_renpy_translate_say_uses_translated_name(self):
+        self._remove_seen_translation()
         tr_node = TranslateSay("tl_elin", identifier="id_002")
         self._translator._map["id_002"] = tr_node
         node = TranslateSay("elin_orig", identifier="id_002")
@@ -345,27 +382,43 @@ class TestMakeSeenFnExtended:
 
 class TestEvalSeenFnSayRange:
     def setup_method(self):
-        self._seen_ever_saved = _rpy_ns["persistent"]._seen_ever
+        _p = _rpy_ns["persistent"]
+        self._seen_ever_saved       = _p._seen_ever
+        self._seen_translates_saved = _p._seen_translates
+        _p._seen_translates = set()
 
     def teardown_method(self):
-        _rpy_ns["persistent"]._seen_ever = self._seen_ever_saved
+        _p = _rpy_ns["persistent"]
+        _p._seen_ever       = self._seen_ever_saved
+        _p._seen_translates = self._seen_translates_saved
 
+    ## String keys → seen_translation() (new RenPy path)
     def test_say_range_first_absent_returns_false(self):
-        _rpy_ns["persistent"]._seen_ever = {"last_name": True}
+        _rpy_ns["persistent"]._seen_translates = {"last_name"}
         assert _tl_eval_seen_fn(("say_range", "first_name", "last_name")) is False
 
     def test_say_range_first_seen_last_absent_returns_false(self):
-        _rpy_ns["persistent"]._seen_ever = {"first_name": True}
+        _rpy_ns["persistent"]._seen_translates = {"first_name"}
         assert _tl_eval_seen_fn(("say_range", "first_name", "last_name")) is False
 
     def test_say_range_both_seen_returns_true(self):
-        _rpy_ns["persistent"]._seen_ever = {"first_name": True, "last_name": True}
+        _rpy_ns["persistent"]._seen_translates = {"first_name", "last_name"}
         assert _tl_eval_seen_fn(("say_range", "first_name", "last_name")) is True
 
     def test_say_range_single_name_both_same(self):
-        ## When say_range has the same first and last name, behaves like ("say", name)
-        _rpy_ns["persistent"]._seen_ever = {"only_name": True}
+        _rpy_ns["persistent"]._seen_translates = {"only_name"}
         assert _tl_eval_seen_fn(("say_range", "only_name", "only_name")) is True
+
+    ## Tuple keys → _seen_ever (old RenPy path)
+    def test_say_range_tuple_keys_both_seen(self):
+        _k1, _k2 = ("a.rpy", 1, "h1"), ("a.rpy", 2, "h2")
+        _rpy_ns["persistent"]._seen_ever = {_k1: True, _k2: True}
+        assert _tl_eval_seen_fn(("say_range", _k1, _k2)) is True
+
+    def test_say_range_tuple_keys_first_absent(self):
+        _k1, _k2 = ("a.rpy", 1, "h1"), ("a.rpy", 2, "h2")
+        _rpy_ns["persistent"]._seen_ever = {_k2: True}
+        assert _tl_eval_seen_fn(("say_range", _k1, _k2)) is False
 
 
 # =============================================================================
@@ -429,16 +482,13 @@ class TestOptionSeen:
         p = _rpy_ns["persistent"]
         self._chosen_saved    = p._chosen
         self._seen_ever_saved = p._seen_ever
-        self._ast_map_saved   = _rpy_ns.get("_tl_ast_map", {})
         p._chosen    = {}
         p._seen_ever = {}
-        _rpy_ns["_tl_ast_map"] = {}
 
     def teardown_method(self):
         p = _rpy_ns["persistent"]
         p._chosen    = self._chosen_saved
         p._seen_ever = self._seen_ever_saved
-        _rpy_ns["_tl_ast_map"] = self._ast_map_saved
 
     def _node(self, options, location=None, ast_key=None):
         n = {"index": 0, "options": options, "chosen_index": 0,
@@ -456,29 +506,7 @@ class TestOptionSeen:
         node = self._node(["A", "B"])
         assert _tl_option_seen(node, 1) is False
 
-    def test_ast_map_say_seen(self):
-        key = ("test.rpy", 99)
-        node = self._node(["A", "B"], ast_key=key)
-        _rpy_ns["_tl_ast_map"][key] = [("say", "x"), ("say", "y")]
-        _rpy_ns["persistent"]._seen_ever = {"y": True}
-        assert _tl_option_seen(node, 1) is True
-
-    def test_ast_map_say_unseen(self):
-        key = ("test.rpy", 99)
-        node = self._node(["A", "B"], ast_key=key)
-        _rpy_ns["_tl_ast_map"][key] = [("say", "x"), ("say", "y")]
-        _rpy_ns["persistent"]._seen_ever = {}
-        assert _tl_option_seen(node, 1) is False
-
-    def test_ast_map_label_seen(self):
-        key = ("test.rpy", 99)
-        node = self._node(["A"], ast_key=key)
-        _rpy_ns["_tl_ast_map"][key] = [("label", "my_label")]
-        _rpy_ns["renpy"].seen_label = lambda l: l == "my_label"
-        assert _tl_option_seen(node, 0) is True
-        _rpy_ns["renpy"].seen_label = lambda l: False
-
-    def test_no_location_no_ast_map_returns_false(self):
+    def test_no_location_returns_false(self):
         node = {"index": 0, "options": ["A"], "chosen_index": 0}
         assert _tl_option_seen(node, 0) is False
 

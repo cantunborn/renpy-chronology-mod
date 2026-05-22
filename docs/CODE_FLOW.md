@@ -14,7 +14,7 @@ The mod is split across three layers:
 
 The timeline runtime starts with menu interception.
 
-`timeline_hooks.rpy` wraps `renpy.exports.menu` and `renpy.store.menu`. Before a menu is shown, `_tl_record_before()` creates a history node with menu metadata, AST key, snapshot, and thumbnail context. After the player chooses an option, `_tl_record_after()` stores the chosen index, extends `_tl_context`, and queues checkpoint saving.
+`timeline_hooks.rpy` wraps `renpy.exports.menu` and `renpy.store.menu`. Before a menu is shown, `_tl_record_before()` evaluates each item's condition (`entry[1]`) to filter available options (prompt detected by `block is None`), then creates a history node with menu metadata, AST key, snapshot, and thumbnail context. After the player chooses an option, `_tl_record_after()` stores the chosen index, extends `_tl_context`, and queues checkpoint saving.
 
 Checkpoint and chapter-end persistence hang off the same runtime layer. `_tl_interact_callback()` writes normal checkpoint saves after interactions. `_tl_chapter_label_cb()` records chapter-end markers and writes chapter-end saves at the label boundary. Both callbacks are registered in `timeline_hooks.rpy`.
 
@@ -250,13 +250,14 @@ The route tracker shows which story variables gate upcoming content and what the
 
 **Init (background thread, after game load)**:
 1. `_tl_build_ast_map()` calls `_tl_build_route_index(nodes)` with all label nodes from `renpy.game.script.namemap`.
-2. `_tl_build_route_index` does a full iterative block walk (work-queue from Label entry points) and two passes:
+2. `_tl_build_route_index` does a full iterative block walk (work-queue from Label entry points) and three passes:
    - Python-node pass: collect var names, detect numeric classification, collect domain literals
+   - Default-node pass: eval bytecode of `default` AST nodes; store scalar defaults in `store._tl_var_defaults` (non-scalars skipped to avoid persistence errors)
    - If-node pass: accumulate `if_count` per var, build seen descriptors per branch
-3. Results written to `persistent.*` keys — survives reloads.
+3. Results written to `persistent.*` keys — survives reloads. `store._tl_var_defaults` is transient and rebuilt each session.
 
 **Render time**:
-`_tl_build_route_chips()` reads persistent index and current store values. Filters by `if_count > 0`, non-None scalar value, and consumed/highlight rules. Returns `list[(var_name, current_value)]` sorted: highlighted (ghost/recently-changed) first by `if_count` desc, then rest by `if_count` desc.
+`_tl_build_route_chips()` reads persistent index and current store values. Hides vars with None values, non-scalar values, or values still at declared default (from `store._tl_var_defaults`) unless ghost-highlighted or recently-changed. Returns `list[(var_name, current_value)]` sorted: highlighted (ghost/recently-changed) first by `if_count` desc, then rest by `if_count` desc.
 
 `_tl_highlighted = ghost_vars ∪ recently_changed_vars` where `ghost_vars` comes from `_tl_ghost_nodes[*]["affecting_vars"]` and `recently_changed_vars` is `store._tl_recently_changed_vars`.
 

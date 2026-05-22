@@ -281,74 +281,60 @@ init python:
             persistent._tl_replaying = saved_replaying
 
 
-    def _tl_test_option_conditions_alignment(r):
-        """_option_conditions must be parallel to available-only options (locked items skipped)."""
-        s = "option_conditions_alignment"
+    def _tl_test_option_filtering(r):
+        """_tl_record_before filters options by evaluated condition at record time."""
+        s = "option_filtering"
 
         class FakeCR(object):
             def get_chosen(self): return False
 
-        class FakeMenuAST(object):
-            def __init__(self):
-                self.__class__.__name__ = "Menu"
-                # AST items: (label, condition_str, block_or_None)
-                # Prompt has block=None; available has block=object(); locked has same but skipped at runtime
-                self.items = [
-                    ("Pick one:", None, None),                # prompt — skipped (_blk is None)
-                    ("Available A", "True", object()),        # available, no condition
-                    ("Locked B", "money >= 10", object()),    # locked at runtime
-                    ("Available C", "affection >= 5", object()),  # available, has condition
-                ]
+        def _run(items):
+            saved_history   = list(_tl_history)
+            saved_count     = _tl_node_count
+            saved_context   = list(_tl_context)
+            saved_replaying = persistent._tl_replaying
+            try:
+                persistent._tl_replaying = False
+                store._tl_history    = []
+                store._tl_node_count = 0
+                store._tl_context    = []
+                store._tl_branch_id  = ""
+                return _tl_record_before(items)
+            finally:
+                store._tl_history     = saved_history
+                store._tl_node_count  = saved_count
+                store._tl_context     = saved_context
+                persistent._tl_replaying = saved_replaying
 
-        fake_loc = "_tl_test_conditions_loc"
-        fake_ast = FakeMenuAST()
+        # boolean True cond → included
+        node = _run([("Q", None, None), ("Yes", True, FakeCR())])
+        r.check(s, "bool True cond included", node is not None and "Yes" in node["options"])
 
-        # Runtime items: locked B has entry[2]=False
-        fake_items = [
-            ("Pick one:", True, None),
-            ("Available A", True, FakeCR()),
-            ("Locked B", False, False),
-            ("Available C", True, FakeCR()),
-        ]
+        # boolean False cond → excluded
+        node = _run([("Q", None, None), ("Locked", False, False), ("Open", True, FakeCR())])
+        r.check(s, "bool False cond excluded",  node is not None and "Locked" not in node["options"])
+        r.check(s, "available still present",   node is not None and "Open" in node["options"])
 
-        saved_history    = list(_tl_history)
-        saved_count      = _tl_node_count
-        saved_context    = list(_tl_context)
-        saved_replaying  = persistent._tl_replaying
-        saved_namemap    = dict(renpy.game.script.namemap)
-        saved_context_fn = renpy.game.context
+        # string "True" cond → included
+        node = _run([("Q", None, None), ("StrTrue", "True", FakeCR())])
+        r.check(s, "string True cond included", node is not None and "StrTrue" in node["options"])
 
-        try:
-            persistent._tl_replaying = False
-            store._tl_history    = []
-            store._tl_node_count = 0
-            store._tl_context    = []
-            store._tl_branch_id  = ""
+        # string "False" cond → excluded
+        node = _run([("Q", None, None), ("StrFalse", "False", False), ("Open", True, FakeCR())])
+        r.check(s, "string False cond excluded", node is not None and "StrFalse" not in node["options"])
 
-            renpy.game.script.namemap[fake_loc] = fake_ast
-            renpy.game.context = lambda: __import__("types").SimpleNamespace(
-                current=fake_loc,
-                scene_lists=__import__("types").SimpleNamespace(layers={})
-            )
+        # None cond with block → included (unconditional choice)
+        node = _run([("Q", None, None), ("Uncond", None, FakeCR())])
+        r.check(s, "None cond with block included", node is not None and "Uncond" in node["options"])
 
-            node = _tl_record_before(fake_items)
+        # all options locked → returns None
+        result = _run([("Q", None, None), ("A", False, False), ("B", False, False)])
+        r.check(s, "all locked returns None", result is None)
 
-            conds = node.get("_option_conditions", [])
-            r.check(s, "returns dict",                      isinstance(node, dict))
-            r.check(s, "conditions length matches options", len(conds) == len(node["options"]))
-            r.check(s, "available A has no condition",      len(conds) > 0 and conds[0] is None)
-            r.check(s, "available C has condition string",  len(conds) > 1 and conds[1] == "affection >= 5")
-            r.check(s, "locked B not in options",           "Locked B" not in node["options"])
-
-        except Exception as e:
-            r.check(s, "no exception", False, str(e))
-        finally:
-            store._tl_history     = saved_history
-            store._tl_node_count  = saved_count
-            store._tl_context     = saved_context
-            persistent._tl_replaying = saved_replaying
-            renpy.game.script.namemap = saved_namemap
-            renpy.game.context        = saved_context_fn
+        # block=None → prompt, not an option
+        node = _run([("Prompt text", None, None), ("Pick", True, FakeCR())])
+        r.check(s, "block=None is prompt not option", node is not None and "Prompt text" not in node["options"])
+        r.check(s, "prompt extracted correctly",      node is not None and node["prompt"] == "Prompt text")
 
 
     def _tl_test_node_has_new(r):
@@ -985,7 +971,7 @@ init python:
         _tl_test_thumb_cache(r)
         _tl_test_record_pipeline(r)
         _tl_test_locked_options(r)
-        _tl_test_option_conditions_alignment(r)
+        _tl_test_option_filtering(r)
         _tl_test_node_has_new(r)
         _tl_test_validate_history(r)
         _tl_test_chapter_store_defaults(r)
