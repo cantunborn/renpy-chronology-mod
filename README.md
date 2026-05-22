@@ -1,6 +1,8 @@
 # Chronology Mod
 
-A non-intrusive choice history tracker for RenPy visual novels. Records every decision you make, shows what you've seen and what's still unexplored, and lets you jump back to any past choice.
+A choice history tracker for Ren'Py visual novels. Records every decision you make, shows which paths you've seen and which are still locked, and lets you jump back to any past choice to try a different one.
+
+---
 
 ## Installation
 
@@ -30,98 +32,74 @@ Launch the game — no further setup needed. Works on existing saves; the mod st
 | Key | Action |
 |-----|--------|
 | **T** | Open / close timeline |
-| **Esc** | Close timeline |
+| **R** | Open / close route tracker |
+| **Esc** | Close |
 
 ---
 
 ## Features
 
 ### Choice Timeline
-Every menu choice you make is recorded as a card in the timeline. Each card shows:
-- A thumbnail based on the game image shown when the choice appeared
-- The option you picked
-- Whether any options in that menu lead to content you haven't seen yet (dot indicator)
+
+Every menu choice you make is recorded as a card in the timeline. Each card shows a thumbnail from when the choice appeared, the option you picked, and a dot if any option in that menu leads to content you haven't seen yet.
 
 ### New Content Indicators
-The mod automatically detects which options lead to unseen content by walking the game's script at startup. A dot (●) marks any option — or any past card — that still has unexplored paths.
 
-The header shows a count of how many past choices have at least one new path available.
+The mod walks the game's script at startup to detect which options lead to unseen content. A dot (●) marks any card or option that still has unexplored paths. The header shows how many choices in your history have new paths available and how many branches across the game are still locked.
 
 ### All Options Modal
+
 Click **All options** on any past card to see every choice that was available at that point:
 - `→` marks the option you chose
-- A muted `→` marks the option you made on the path this save was forked from
+- A muted `→` marks the option from the path your current save branched off from
 - A dot marks options with unseen content
 
-### Jump Back and Forking
-In the modal, click any option to jump back to that point in the story and play from there with a different choice. The mod saves a recovery point before jumping so you can return to the original path if needed.
+### Jump Back and Replay
 
-Jumps use a save + skip approach: the mod loads the nearest checkpoint save and fast-forwards through dialogue to reach the target choice automatically.
+In the modal, click any option to jump back to that point and play forward with a different choice. The mod saves a recovery point first, so you can always return to where you were.
 
-**Forking a save.** A common use is to duplicate a save before jumping, keeping the original intact. The duplicate becomes a fork — an independent run from that branch point. Hints from the original path carry over into the forked save, so you always know where the two paths differ:
+**Playing what-if from a save.** If you want to try a different choice without losing your current progress, save to a new slot first — that keeps your current run intact. Then jump back to an earlier choice from your original save. Now you have two independent runs: one continuing as it was, one playing out differently from that point. You don't have to replay the whole game just to see what changes.
 
-- At each **upcoming menu**, a muted `→` marks the choice you made on the original path. You can follow it or go a different way — your call.
-- The **jump point itself** gets a `⎇` marker in the timeline if you chose differently, making it easy to see where the fork started.
-- **Further down the timeline**, any card where your new choices diverge from the original also shows `⎇`. Open the All Options modal on those cards to see which option the original path took.
+The new run carries hints from the original, so you know exactly where the two paths diverge:
+- At each upcoming choice, a muted `→` shows what you picked on the original run. Follow it or go a different way.
+- The point where you split off gets a `⎇` marker in your timeline.
+- Further down, any choice where the two runs differ also shows `⎇` — open the modal on those cards to see what the original path took.
 
-Hints are tied to the save file, not the session — they persist across loads and carry over when you duplicate or share a save. They clear automatically as each matching menu is reached, and disappear entirely if you jump again (resetting the reference path to the current run).
+Hints persist across saves and loads. They clear as each matching choice is reached, and reset if you jump again.
 
-### Thumbnail Cache
-Timeline thumbnails now prefer game assets over screenshots. When a menu appears, the mod first tries to resolve the live image currently shown by the game and stores that image name in persistent data for that menu site. A structural AST walk backfills older or not-yet-reached menus with a best-effort image guess, and screenshots remain only as an explicit fallback when asset resolution misses. Timeline rendering only falls back to live `img_name` rendering for plain file-backed assets; dynamic image definitions stay on the safe screenshot/plain-background path.
+### Chapter Markers
 
-The screenshot fallback cache is still stored in RenPy's persistent data file, so it survives mod reinstalls and carries over between sessions. Up to 500 fallback screenshots are kept; at the limit the persistent file grows by at most ~25 MB. Most games have far fewer unresolved choice screens, so typical usage should be much lower once asset-backed thumbnails cover the common paths.
+If the mod is configured with your game's chapters, the timeline shows a divider at the end of each chapter. Clicking the divider jumps directly to that chapter's ending — useful for catching up on a new update without replaying everything.
 
-### Chapter End Indicators
-The mod ships with a sample `chapters.json`. If you populate it with your game's chapters, the timeline shows a divider at the end of each chapter. Clicking the divider jumps directly to that chapter's ending — useful for catching up on a new update without replaying everything.
+### Route Tracker
 
-The divider shows: `—— End of Chapter Name ——`
+Press R to open the route tracker. It shows the story variables that gate content — route flags, relationship values, stat choices — and what they're currently set to. Variables tied to the most recent branch cards are highlighted at the top.
 
-Edit `game/renpy-chronology-mod/chapters.json` and replace the sample entries with your game's chapter names and end labels:
+### Branch Cards
 
-```json
-{
-    "_comment": "...",
-    "Prologue":  "prologue_end_label",
-    "Chapter 1": "chapter_1_end_label"
-}
-```
+When the game evaluates a story branch between your choices, the route screen shows one card per path. A lock icon means you've never seen that path. A dim overlay means you've seen it on a previous playthrough. No overlay means you took it this run. Branch cards clear at the next choice.
 
-Any key starting with `_` is ignored. To find a label name: open the RenPy console (Shift+O), navigate to the scene you want to mark, then run `renpy.game.context().current`.
+### Branch Notifications
+
+When you pass through a branching point, a brief toast appears: `⎇` if there are paths you haven't taken, `⎇ New path` if the branch you just took is itself new. When a story variable changes mid-scene, a separate toast shows what changed — `↑ Affection`, `Route → romance`, etc.
 
 ### Save Compatibility
+
 - **Installing mid-playthrough:** the mod starts recording from that point. Earlier choices show no history, which is expected.
-- **Removing the mod:** existing saves load normally. RenPy ignores the unused `_tl_*` variables.
+- **Removing the mod:** existing saves load normally. Ren'Py ignores the unused `_tl_*` variables.
 - **Loading a corrupted save:** history is validated and any malformed entries are dropped silently.
 
 ---
 
-## Session Entry
+## Ren'Py Compatibility
 
-For new AI/code-assistant chats, start with:
-
-1. `docs/AGENTS.md`
-2. `docs/SESSION_GUIDE.md`
-3. the relevant feature doc in `docs/`
-
-Those files are the lightweight session context layer. `README.md` remains the stable human-facing overview.
+Should work with most Ren'Py 7 and 8 versions. The background blur may not render on some Ren'Py 7 renderers, but all other features work normally. Chapter markers may not work with all Ren'Py 7 versions.
 
 ---
 
-## RenPy Compatibility
+<details>
+<summary>Developer reference</summary>
 
-Tested on **RenPy 7.5.3** and **RenPy 8.3.2**.
+For file ownership, function signatures, variable lists, and test coverage — see [docs/DEV_NOTES.md](docs/DEV_NOTES.md).
 
-Compatibility holds across both versions for a few reasons:
-- The mod hooks into `renpy.exports.menu` and `renpy.store.menu`, which have had a stable `(label, condition, value)` item tuple structure since RenPy 7.
-- Save/load callbacks (`config.start_callbacks`, `config.after_load_callbacks`, `config.interact_callbacks`) are part of RenPy's public API and unchanged between major versions.
-- The AST walker uses `type(node).__name__` string checks rather than importing RenPy AST classes directly, so it doesn't break if internal class paths change between 7 and 8.
-- RenPy 8 is built on the same codebase as 7 with a Python 3 runtime; no API used here was removed in the transition.
-
-**Exception:** chapter end indicators require `config.label_callbacks`, which was added in RenPy 7.6 / 8.1. On older versions the feature is silently disabled — the rest of the mod works normally.
-
-**Exception:** screenshot fallback requires `renpy.screenshot_to_bytes`, added in RenPy 7.5. On older versions, asset-backed thumbnails still work when an image name can be resolved, but screenshot fallback is skipped — unresolved cards show a plain background instead. Choice tracking, dots, jump-back, and chapter markers all work normally.
-
----
-
-For the full developer reference — file ownership, function signatures, variable lists, and test coverage — see [docs/DEV_NOTES.md](docs/DEV_NOTES.md).
-
+</details>

@@ -26,6 +26,7 @@ init -2 python:
             else:
                 seen_labels[_ch_label] = _ch_name
                 deduped[_ch_name] = _ch_label
+        _tl_log("TL chapters: loaded {} from {}".format(len(deduped), path))
         return deduped
 
     def _tl_dedup_chapters(raw):

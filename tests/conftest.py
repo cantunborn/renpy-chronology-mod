@@ -34,6 +34,12 @@ _persistent = types.SimpleNamespace(
     _tl_recovery_slot=None,
     _seen_ever={},
     _chosen={},
+    # route tracker keys
+    _tl_route_var_names=[],
+    _tl_var_if_count={},
+    _tl_if_key_to_vars={},
+    _tl_var_domain={},
+    _tl_var_is_numeric=set(),
 )
 
 # store stub — wraps persistent for attribute delegation
@@ -53,8 +59,19 @@ _renpy.config = types.SimpleNamespace(
     interact_callbacks=[],
     label_callbacks=[],
 )
+class _TranslatorStub:
+    """Minimal translator stub for seen-check tests."""
+    def __init__(self):
+        self._map = {}   # {identifier: TranslateSay-like object}
+
+    def lookup_translate(self, identifier):
+        return self._map.get(identifier)
+
 _renpy.game = types.SimpleNamespace(
-    script=types.SimpleNamespace(namemap={}),
+    script=types.SimpleNamespace(
+        namemap={},
+        translator=_TranslatorStub(),
+    ),
     context=lambda: types.SimpleNamespace(
         scene_lists=types.SimpleNamespace(layers={})
     ),
@@ -66,6 +83,7 @@ _renpy.exports = types.SimpleNamespace(menu=None)
 _renpy.save = _noop
 _renpy.load = _noop
 _renpy.notify = _noop
+_renpy.show_screen = _noop
 _renpy.save_persistent = _noop
 _renpy.seen_label = lambda label: False
 _renpy.screenshot_to_bytes = lambda *a, **kw: b""
@@ -175,10 +193,23 @@ class Scene(_TLNode):
     def __init__(self):
         super().__init__("Scene")
 
+class Show(_TLNode):
+    def __init__(self, *name_parts):
+        super().__init__("Show")
+        if name_parts:
+            self.imspec = (list(name_parts),)
+
 class Say(_TLNode):
-    def __init__(self, name):
+    def __init__(self, name, identifier=None):
         super().__init__("Say")
         self.name = name
+        self.identifier = identifier
+
+class TranslateSay(_TLNode):
+    def __init__(self, name, identifier=None):
+        super().__init__("TranslateSay")
+        self.name = name
+        self.identifier = identifier
 
 class Return(_TLNode):
     def __init__(self):
@@ -201,15 +232,16 @@ class Label(_TLNode):
         self.linenumber = 1
 
 # Aliases for test imports
-_TLPythonNode = Python
-_TLJumpNode   = Jump
-_TLCallNode   = Call
-_TLMenuNode   = Menu
-_TLSceneNode  = Scene
-_TLSayNode    = Say
-_TLReturnNode = Return
-_TLIfNode     = If
-_TLLabelNode  = Label
+_TLPythonNode      = Python
+_TLJumpNode        = Jump
+_TLCallNode        = Call
+_TLMenuNode        = Menu
+_TLSceneNode       = Scene
+_TLSayNode         = Say
+_TLTranslateSayNode = TranslateSay
+_TLReturnNode      = Return
+_TLIfNode          = If
+_TLLabelNode       = Label
 
 # renpy.ast stub — must come after If is defined; used by tl_ghost_logic.rpy
 _renpy_ast_mod = types.ModuleType("renpy.ast")
@@ -233,6 +265,8 @@ for _f in [
     "backend/tl_saveload.rpy",
     "backend/tl_assets.rpy",
     "backend/tl_ghost_logic.rpy",
+    "backend/tl_route_logic.rpy",
+    "backend/tl_coverage.rpy",
     "timeline_init.rpy",
 ]:
     load_rpy(_f, _rpy_ns)
@@ -240,6 +274,11 @@ for _f in [
 # Globals that timeline_init.rpy sets via `default` (not in init python: blocks)
 _rpy_ns.setdefault("_tl_history", [])
 _rpy_ns.setdefault("_tl_context", [])
+_rpy_ns.setdefault("_tl_ghost_nodes", [])
+_rpy_ns.setdefault("_tl_pending_var_changes", {})
+_rpy_ns.setdefault("_tl_recently_changed_vars", set())
+_rpy_ns.setdefault("_tl_menu_var_snap", None)
+_rpy_ns.setdefault("_tl_var_if_seen_keys", {})
 
 load_rpy("timeline_hooks.rpy", _rpy_ns)
 

@@ -115,11 +115,19 @@ class TestPrettifyCondition:
         assert "route_id" not in result
         assert "Route Id" in result
 
-    def test_string_literal_content_also_prettified(self):
-        # NOTE: _tl_prettify_condition applies VAR_RE to the raw condition string,
-        # so identifiers inside string literals are also prettified (known behavior).
-        result = _prettify_c("route_id == 'romance'")
-        assert "romance" in result.lower()
+    def test_string_literal_value_unquoted(self):
+        result = _prettify_c("route_id == 'cold_castle'")
+        assert "cold_castle" in result          ## value preserved
+        assert "Cold Castle" not in result      ## not prettified
+        assert "'" not in result                ## quotes stripped
+
+    def test_string_literal_value_unquoted_double_quotes(self):
+        result = _prettify_c('route_id == "cold_castle"')
+        assert "cold_castle" in result
+        assert '"' not in result                ## quotes stripped
+
+    def test_full_condition_format(self):
+        assert _prettify_c("route_id == 'romance'") == "Route Id == romance"
 
     def test_keyword_not_prettified(self):
         result = _prettify_c("x == 1 and y == 2")
@@ -354,3 +362,138 @@ class TestPartitionIfRun:
         p2 = self._payload(["z == 'a'", "z == 'b'"], all_exit=True)
         groups = _partition([p1, p2])
         assert len(groups) == 1
+
+# ---------------------------------------------------------------------------
+# _tl_notify_branch — notification tier logic
+# ---------------------------------------------------------------------------
+
+_notify_branch = ns["_tl_notify_branch"]
+_python_patched = ns["_tl_python_execute_patched"]
+
+
+class TestNotifyBranch:
+    def setup_method(self):
+        self._seen_ever_saved = ns["persistent"]._seen_ever
+        self._show_screen_calls = []
+        def _capture_show_screen(name, **kwargs):
+            self._show_screen_calls.append((name, kwargs))
+        ns["renpy"].show_screen = _capture_show_screen
+        self._show_screen_saved = ns["renpy"].show_screen
+
+    def teardown_method(self):
+        ns["persistent"]._seen_ever = self._seen_ever_saved
+        ns["renpy"].show_screen = lambda *a, **kw: None
+
+    def _payload(self, seen_fns, taken_index=None):
+        return {"seen_fns": seen_fns, "taken_index": taken_index,
+                "conditions": [], "affecting_vars": set()}
+
+    def test_all_branches_seen_suppresses(self):
+        ns["persistent"]._seen_ever = {"a": True, "b": True}
+        run = [self._payload([("say", "a"), ("say", "b")], taken_index=0)]
+        _notify_branch(run, 0, pre_taken_seen=True)
+        assert self._show_screen_calls == []
+
+    def test_new_path_fires_when_pre_taken_seen_false(self):
+        ns["persistent"]._seen_ever = {}
+        run = [self._payload([("say", "x"), ("say", "y")], taken_index=0)]
+        _notify_branch(run, 0, pre_taken_seen=False)
+        assert len(self._show_screen_calls) == 1
+        assert "New path" in self._show_screen_calls[0][1]["message"]
+
+    def test_icon_only_when_taken_seen_alternative_locked(self):
+        ns["persistent"]._seen_ever = {"taken": True}
+        run = [self._payload([("say", "taken"), ("say", "unseen_alt")], taken_index=0)]
+        _notify_branch(run, 0, pre_taken_seen=True)
+        assert len(self._show_screen_calls) == 1
+        msg = self._show_screen_calls[0][1]["message"]
+        assert "New path" not in msg
+        assert "⎇" in msg
+
+    def test_standalone_if_not_taken_alternative_locked_fires_icon_only(self):
+        ## taken_glob_i=None (unsatisfied standalone if); alternative is locked → ⎇
+        ns["persistent"]._seen_ever = {}
+        run = [self._payload([("say", "locked_branch")], taken_index=None)]
+        _notify_branch(run, None, pre_taken_seen=None)
+        assert len(self._show_screen_calls) == 1
+        assert "⎇" in self._show_screen_calls[0][1]["message"]
+        assert "New path" not in self._show_screen_calls[0][1]["message"]
+
+    def test_standalone_if_all_alternatives_seen_suppresses(self):
+        ns["persistent"]._seen_ever = {"branch": True}
+        run = [self._payload([("say", "branch")], taken_index=None)]
+        _notify_branch(run, None, pre_taken_seen=None)
+        assert self._show_screen_calls == []
+
+    def test_index_based_comparison_correct_branch_excluded(self):
+        ## Two branches with identical tuples; only the one at taken_glob_i is excluded.
+        ## If comparison were identity-based, equal tuples would both be "not taken".
+        sfn = ("say", "shared_name")
+        ns["persistent"]._seen_ever = {"shared_name": True}
+        run = [self._payload([sfn, sfn], taken_index=0)]
+        _notify_branch(run, 0, pre_taken_seen=True)
+        ## Branch 0 is taken (excluded). Branch 1 has same sfn but IS checked.
+        ## seen_ever has the name → both seen → suppress.
+        assert self._show_screen_calls == []
+
+    def test_new_path_takes_priority_over_icon_only(self):
+        ## pre_taken_seen=False → "New path" returned before ⎇ check
+        ns["persistent"]._seen_ever = {}
+        run = [self._payload([("say", "new"), ("say", "also_unseen")], taken_index=0)]
+        _notify_branch(run, 0, pre_taken_seen=False)
+        assert len(self._show_screen_calls) == 1
+        assert "New path" in self._show_screen_calls[0][1]["message"]
+
+
+# ---------------------------------------------------------------------------
+# _tl_python_execute_patched — filename filter
+# ---------------------------------------------------------------------------
+
+class TestPythonExecutePatched:
+    def setup_method(self):
+        self._orig_calls = []
+        self._branch_id_saved = ns.get("_tl_branch_id", "")
+        ns["store"]._tl_branch_id = "test_branch_abc"
+        ns["persistent"]._tl_replaying = False
+        ns["renpy"].config.skipping = False
+        self._diff_calls = []
+        self._orig_diff = ns["_tl_diff_route_vars"]
+        def _capture_diff(snap):
+            self._diff_calls.append(snap)
+        ns["_tl_diff_route_vars"] = _capture_diff
+
+    def teardown_method(self):
+        ns["store"]._tl_branch_id = self._branch_id_saved
+        ns["persistent"]._tl_replaying = False
+        ns["renpy"].config.skipping = False
+        ns["_tl_diff_route_vars"] = self._orig_diff
+
+    def _make_py(self, filename):
+        from conftest import Python
+        node = Python("x = 1")
+        node.filename = filename
+        return node
+
+    def test_game_script_diff_called(self):
+        ## game/ file with branch_id → _tl_diff_route_vars IS called
+        node = self._make_py("game/scripts/intro.rpy")
+        _python_patched(node)
+        assert len(self._diff_calls) == 1
+
+    def test_mod_file_bypasses_diff(self):
+        ## renpy-chronology-mod in filename → short-circuit, no diff
+        node = self._make_py("game/renpy-chronology-mod/backend/tl_ghost_logic.rpy")
+        _python_patched(node)
+        assert self._diff_calls == []
+
+    def test_non_game_file_bypasses_diff(self):
+        ## Not game/ → short-circuit, no diff
+        node = self._make_py("renpy/common/_layout.rpym")
+        _python_patched(node)
+        assert self._diff_calls == []
+
+    def test_replaying_bypasses_diff(self):
+        ns["persistent"]._tl_replaying = True
+        node = self._make_py("game/scripts/intro.rpy")
+        _python_patched(node)
+        assert self._diff_calls == []

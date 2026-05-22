@@ -27,7 +27,8 @@ The mod is split across three layers:
 **Subsystem modules (`backend/`)** — all run at `init -2 python:`
 - `tl_saveload.rpy` — checkpoint save/load, slot naming, replay state, jump mechanics
 - `tl_assets.rpy` — thumbnail capture, asset resolution, displayable creation, caching
-- `tl_ghost_logic.rpy` — ghost card synthesis; monkey-patches `renpy.ast.If.execute`
+- `tl_ghost_logic.rpy` — ghost card synthesis; monkey-patches `renpy.ast.If.execute` and `Python.execute`
+- `tl_route_logic.rpy` — route tracker: AST index build, chip filtering/ordering, var change detection pipeline
 - `tl_seen_check.rpy` — seen-state tracking, descriptors, option-seen checks
 - `tl_shadow_path.rpy` — replay-aid shadow path: build, stage, match, consume
 - `tl_chapter.rpy` — chapter metadata loading, rollback
@@ -38,6 +39,7 @@ The mod is split across three layers:
 **UI screens (`ui/`)** — screen definitions only, no behavior logic
 - `tl_cards.rpy` — past and current choice card screens
 - `tl_ghost_cards.rpy` — ghost branch card screens
+- `tl_route_screen.rpy` — route tracker chip bar (`tl_route`) and mod notification (`_tl_notify`)
 - `tl_modal.rpy` — option modal screen
 - `tl_debug.rpy` — debug overlay screen
 - `tl_theme.rpy` — shared styling constants and theme helpers
@@ -55,6 +57,13 @@ Everything else in `tools/` (gen_cfg.py, causal_analysis.py, build_vis.py, etc.)
 - `docs/GHOST_CARDS.md`
 - `backend/tl_ghost_logic.rpy`
 - `ui/tl_ghost_cards.rpy`
+
+### Route tracker / var change notifications
+
+- `docs/ROUTE_TRACKER.md`
+- `backend/tl_route_logic.rpy`
+- `ui/tl_route_screen.rpy`
+- `timeline_screen.rpy` (tab toggle, tooltip, `_tl_capture_hover_pos`)
 
 ### Jump back / replay aid / shadow path
 
@@ -103,6 +112,8 @@ Everything else in `tools/` (gen_cfg.py, causal_analysis.py, build_vis.py, etc.)
 ## Common Follow-Up Docs
 
 - `docs/GHOST_CARDS.md`
+- `docs/ROUTE_TRACKER.md`
+- `docs/NON_INTRUSIVENESS.md`
 - `docs/DEV_NOTES.md`
 - `docs/CODE_FLOW.md`
 - `docs/changelog.md`

@@ -30,6 +30,9 @@ init -2 python:
     TL_DENSE_SAVES      = 5    ## save every choice for the first N nodes
     TL_THUMB_CACHE_MAX  = 500  ## max thumbnails (~25MB at ~50KB/thumb)
     TL_PROFILE_TIMELINE = False
+    TL_DEBUG_GHOST      = False   ## ghost synthesis detail (if-execute, clustering, branch-img)
+    TL_DEBUG_SEEN       = False   ## seen-state resolution detail (opt_seen, peek_seen)
+    TL_DEBUG_ROUTE      = False   ## route tracker detail (var diff per Python block)
     _tl_timeline_perf_stats = {}
 
     def _tl_runtime_cache_store():
@@ -153,6 +156,10 @@ default _tl_ast_map    = {}     ## {(filename, line): [seen_fn, ...]} — RenPy 
 default _tl_shadow_path = None  ## [{location, chosen_index}] replay-aid hints, or None
 default _tl_ghost_nodes      = []    ## ghost dicts for If branches in current scene segment
 default _tl_ghost_highlight  = None  ## (ast_key, branch_index) or None — selected branch row
+default _tl_pending_var_changes = {} ## {var_name: (old_val, new_val)} — flushed to notify, then cleared
+default _tl_menu_var_snap = None    ## pre-menu route var snapshot for next-menu var-change attribution
+default _tl_recently_changed_vars = set()  ## vars changed since last menu; cleared at _tl_record_before
+default _tl_var_if_seen_keys = {}   ## {var_name: set(ast_keys)} — If nodes executed this session
 
 ## Replay state — stored in persistent so it survives a save/load cycle.
 init python:
@@ -211,6 +218,9 @@ init -2 python:
         store._tl_ast_map   = ast_map
         store._tl_ast_ready = True
         _tl_log("TL AST done: {} menus".format(len(ast_map)))
+
+        _tl_build_route_index(nodes)
+        _tl_build_coverage_index(nodes)
 
         ## Build persistent scene-before-menu map for backfill only.
         ## Runtime-captured menu images are authoritative and overwrite this map.

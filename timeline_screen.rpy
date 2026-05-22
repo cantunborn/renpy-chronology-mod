@@ -5,6 +5,7 @@
 ## -- Keybind ------------------------------------------------------------------
 init python:
     config.keymap["chronology_toggle"] = ["t"]
+    config.keymap["chronology_route"]   = ["r"]
     config.overlay_screens.append("_tl_keylistener")
     config.overlay_screens.append("_tl_debug_overlay")
 
@@ -15,15 +16,31 @@ init:
 
 
 init python:
-    def _tl_toggle():
+    def _tl_capture_hover_pos():
+        store._tl_route_hover_pos = renpy.get_mouse_pos()
+
+    def _tl_toggle(view=None):
         if not hasattr(store, "_tl_history"):
-            return  ## not in-game yet; ignore keybind
-        if renpy.get_screen("timeline"):
-            renpy.layer_at_list([], layer="master")
-            renpy.hide_screen("timeline")
+            return
+        scr = renpy.get_screen("timeline")
+        if scr:
+            current = scr.scope.get("tl_view", "cards")
+            if view is None or current == view:
+                ## Same tab key or Esc → close
+                renpy.layer_at_list([], layer="master")
+                renpy.hide_screen("timeline")
+            else:
+                ## Different tab key → switch view
+                scr.scope["tl_view"] = view
+                renpy.restart_interaction()
         else:
             renpy.layer_at_list([tl_layer_blur], layer="master")
             renpy.show_screen("timeline")
+            if view is not None:
+                scr2 = renpy.get_screen("timeline")
+                if scr2:
+                    scr2.scope["tl_view"] = view
+                    renpy.restart_interaction()
 
 
 ## =============================================================================
@@ -51,11 +68,16 @@ screen timeline():
     modal True
     zorder 200
 
+    default tl_view            = "cards"   ## "cards" | "route"
+    default tl_route_expanded  = False
+    default tl_route_hover     = None
+
     python:
         _tl_perf_screen_t0 = _tl_perf_reset("timeline")
 
-    key "chronology_toggle" action Function(_tl_toggle)
-    key "K_ESCAPE"        action Function(_tl_toggle)
+    key "chronology_toggle" action Function(_tl_toggle, "cards")
+    key "chronology_route"  action Function(_tl_toggle, "route")
+    key "K_ESCAPE"          action Function(_tl_toggle)
 
     add tl_layer_blur
     add Solid("#111111cc")
@@ -82,12 +104,105 @@ screen timeline():
                         style "tl_base_bold"
                         size TL_SIZE_TITLE
                         color TL["header_text"]
-                    text "Choice History":
+                    text ("Route Tracker" if tl_view == "route" else "Choice History"):
                         style "tl_base"
                         size TL_SIZE_BODY
                         color TL["header_sub"]
 
                 null xfill True
+
+                ## ── Route / Cards toggle ───────────────────────────────
+                python:
+                    _tl_btn_cards_bg    = TL["btn_hover_bg"] if tl_view == "cards" else TL["btn_bg"]
+                    _tl_btn_route_bg    = TL["btn_hover_bg"] if tl_view == "route" else TL["btn_bg"]
+                    _tl_btn_cards_color = TL["header_text"] if tl_view == "cards" else TL["header_sub"]
+                    _tl_btn_route_color = TL["header_text"] if tl_view == "route" else TL["header_sub"]
+
+                hbox:
+                    spacing 2
+                    yalign 0.5
+
+                    button:
+                        background Solid(_tl_btn_cards_bg)
+                        hover_background Solid(TL["btn_hover_bg"])
+                        padding (10, 6, 10, 6)
+                        action SetScreenVariable("tl_view", "cards")
+                        yalign 0.5
+
+                        text "History":
+                            style "tl_base"
+                            size TL_SIZE_SUBTITLE
+                            color _tl_btn_cards_color
+                            hover_color TL["header_text"]
+                            yalign 0.5
+
+                    button:
+                        background Solid(_tl_btn_route_bg)
+                        hover_background Solid(TL["btn_hover_bg"])
+                        padding (10, 6, 10, 6)
+                        action SetScreenVariable("tl_view", "route")
+                        yalign 0.5
+
+                        text "Route":
+                            style "tl_base"
+                            size TL_SIZE_SUBTITLE
+                            color _tl_btn_route_color
+                            hover_color TL["header_text"]
+                            yalign 0.5
+
+                null xsize 16
+
+                python:
+                    _tl_perf_t0 = _tl_perf_mark()
+                    _tl_playthrough_new = sum(
+                        1 for _n in _tl_history if _tl_node_has_new(_n))
+                    _tl_perf_add("timeline.playthrough_new", _tl_perf_t0)
+                    _tl_branch_descs = getattr(persistent, "_tl_all_branch_descs", None) or []
+                    _tl_locked       = sum(1 for _d in _tl_branch_descs if not _tl_eval_seen_fn(_d))
+                    _tl_show_locked  = _tl_locked > 0 or _tl_playthrough_new > 0
+
+                if _tl_show_locked:
+                    null xsize 20
+                    vbox:
+                        spacing 4
+                        yalign 0.5
+
+                        if _tl_playthrough_new > 0:
+                            hbox:
+                                spacing 10
+                                yalign 0.5
+                                text "●":
+                                    style "tl_icon"
+                                    size TL_SIZE_DOT
+                                    color TL["new_dot"]
+                                    yalign 0.5
+                                    italic False
+                                text "{} choice{} with new paths".format(
+                                        _tl_playthrough_new,
+                                        "s" if _tl_playthrough_new != 1 else ""):
+                                    style "tl_base"
+                                    size TL_SIZE_BODY
+                                    color TL["new_dot"]
+                                    yalign 0.5
+
+                        if _tl_locked > 0:
+                            hbox:
+                                spacing 10
+                                yalign 0.5
+                                text "●":
+                                    style "tl_icon"
+                                    size TL_SIZE_DOT
+                                    color TL["new_dot"]
+                                    yalign 0.5
+                                    italic False
+                                text "{} branch{} left to unlock".format(
+                                        _tl_locked,
+                                        "es" if _tl_locked != 1 else ""):
+                                    style "tl_base"
+                                    size TL_SIZE_BODY
+                                    color TL["new_dot"]
+                                    yalign 0.5
+                    null xsize 20
 
                 if persistent._tl_recovery_slot:
                     button:
@@ -115,38 +230,15 @@ screen timeline():
                                 hover_color TL["accent"]
                                 yalign 0.5
 
-                python:
-                    _tl_perf_t0 = _tl_perf_mark()
-                    _tl_playthrough_new = sum(
-                        1 for _n in _tl_history if _tl_node_has_new(_n))
-                    _tl_perf_add("timeline.playthrough_new", _tl_perf_t0)
-
-                if _tl_playthrough_new > 0:
-                    hbox:
-                        spacing 10
-                        yalign 0.5
-
-                        text "●":
-                            style "tl_icon"
-                            size TL_SIZE_DOT
-                            color TL["new_dot"]
-                            yalign 0.5
-                            italic False
-
-                        text "{} choice{} with new paths".format(
-                                _tl_playthrough_new,
-                                "s" if _tl_playthrough_new != 1 else ""):
-                            style "tl_base"
-                            size TL_SIZE_BODY
-                            color TL["new_dot"]
-                            yalign 0.5
-
         frame:
             style "tl_frame_base"
             xfill True ysize 3
             background Solid(TL["divider"])
 
-        if not _tl_history:
+        if tl_view == "route":
+            use tl_route(tl_route_expanded, tl_route_hover)
+
+        elif not _tl_history:
             frame:
                 style "tl_frame_base"
                 xfill True yfill True
@@ -235,10 +327,75 @@ screen timeline():
                                     for _p in range(_tl_pad_count):
                                         null xsize _tl_card_w
 
-                        use tl_ghost_rows(_tl_ghost_nodes, _tl_ghost_highlight, _tl_card_w, _tl_cols, _tl_spacing)
 
     if _tl_modal_node is not None:
         use tl_modal(_tl_modal_node)
+
+    ## ── Route tooltip — floats at mouse position, screen-level so xpos/ypos works
+    if tl_view == "route" and tl_route_hover is not None:
+        python:
+            _tt_hx, _tt_hy = getattr(store, "_tl_route_hover_pos", (0, 0))
+            _tt_x  = min(_tt_hx + 14, config.screen_width  - 240)
+            _tt_y  = min(_tt_hy + 14, config.screen_height - 160)
+            _tt_numeric = tl_route_hover in (getattr(persistent, "_tl_var_is_numeric", None) or set())
+            _tt_domain  = [] if _tt_numeric else (
+                (getattr(persistent, "_tl_var_domain", None) or {}).get(tl_route_hover) or []
+            )
+            _tt_cur    = str(getattr(store, tl_route_hover, ""))
+
+        if _tt_domain:
+            frame:
+                style "tl_frame_base"
+                background Solid(TL["modal_bg"])
+                xpos _tt_x
+                ypos _tt_y
+                padding (14, 12, 14, 12)
+                xsize 220
+
+                vbox:
+                    xfill True
+                    spacing 10
+
+                    text "Possible Routes":
+                        style "tl_base_bold"
+                        size TL_SIZE_BODY
+                        color TL["header_text"]
+
+                    frame:
+                        style "tl_frame_base"
+                        xfill True
+                        ysize 1
+                        background Solid(TL["header_sub"] + "44")
+
+                    vbox:
+                        xfill True
+                        spacing 4
+                        for _tt_val in _tt_domain:
+                            python:
+                                _tt_is_cur    = (_tt_val == _tt_cur)
+                                _tt_val_color = TL["header_text"] if _tt_is_cur else TL["header_sub"]
+
+                            hbox:
+                                xfill True
+                                spacing 6
+                                xalign 0.5
+                                yalign 0.5
+
+                                if _tt_is_cur:
+                                    text "→":
+                                        style "tl_base"
+                                        size TL_SIZE_BODY
+                                        font "DejaVuSans.ttf"
+                                        color _tt_val_color
+                                        yalign 0.5
+                                else:
+                                    null xsize 14
+
+                                text _tt_val:
+                                    style "tl_base"
+                                    size TL_SIZE_BODY
+                                    color _tt_val_color
+                                    yalign 0.5
 
     python:
         _tl_perf_dump("timeline", _tl_perf_screen_t0)
@@ -323,6 +480,7 @@ screen tl_chapter_divider(chapter_name, end_label):
 ## =============================================================================
 
 screen _tl_keylistener():
-    key "chronology_toggle" action Function(_tl_toggle)
-    key "tl_debug_toggle" action ToggleVariable("_tl_debug_visible")
+    key "chronology_toggle" action Function(_tl_toggle, "cards")
+    key "chronology_route"  action Function(_tl_toggle, "route")
+    key "tl_debug_toggle"   action ToggleVariable("_tl_debug_visible")
 

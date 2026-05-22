@@ -5,13 +5,15 @@ Run: pytest tests/test_seen_check.py -v
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from conftest import _rpy_ns, Say, Jump, Call, Return, Scene, Label, If, Menu, Python
+from conftest import _rpy_ns, Say, Jump, Call, Return, Scene, Label, If, Menu, Python, TranslateSay
 
-_tl_node_has_new       = _rpy_ns["_tl_node_has_new"]
-_tl_eval_seen_fn       = _rpy_ns["_tl_eval_seen_fn"]
-_tl_make_seen_fn       = _rpy_ns["_tl_make_seen_fn"]
-_tl_find_scene_seen    = _rpy_ns["_tl_find_scene_seen_name"]
-_tl_option_seen        = _rpy_ns["_tl_option_seen"]
+_tl_node_has_new          = _rpy_ns["_tl_node_has_new"]
+_tl_eval_seen_fn          = _rpy_ns["_tl_eval_seen_fn"]
+_tl_make_seen_fn          = _rpy_ns["_tl_make_seen_fn"]
+_tl_find_scene_seen       = _rpy_ns["_tl_find_scene_seen_name"]
+_tl_option_seen           = _rpy_ns["_tl_option_seen"]
+_tl_say_seen_name         = _rpy_ns["_tl_say_seen_name"]
+_tl_follow_jump_seen_name = _rpy_ns["_tl_follow_jump_seen_name"]
 
 # =============================================================================
 # _tl_node_has_new
@@ -152,11 +154,12 @@ class TestMakeSeenFn:
         node = Say("mc")
         assert _tl_make_seen_fn([node]) == ("say", "mc")
 
-    def test_narrator_say_no_name_walks_forward(self):
+    def test_narrator_say_no_name_skipped_next_say_used(self):
+        ## _tl_make_seen_fn iterates the block list, not .next links.
+        ## Narrator Say (name=None) yields no key; the next Say in the block does.
         narrator = Say(None)
         named = Say("elin")
-        _link(narrator, named)
-        assert _tl_make_seen_fn([narrator]) == ("say", "elin")
+        assert _tl_make_seen_fn([narrator, named]) == ("say", "elin")
 
     def test_jump_returns_label_descriptor(self):
         node = Jump("some_label")
@@ -169,11 +172,11 @@ class TestMakeSeenFn:
     def test_return_returns_never(self):
         assert _tl_make_seen_fn([Return()]) == ("never",)
 
-    def test_python_node_walks_to_say(self):
+    def test_python_node_skipped_say_in_block_used(self):
+        ## Python nodes are skipped; the Say later in the same block is used.
         py = Python("x = 1")
         say = Say("viv")
-        _link(py, say)
-        assert _tl_make_seen_fn([py]) == ("say", "viv")
+        assert _tl_make_seen_fn([py, say]) == ("say", "viv")
 
     def test_hits_return_before_say_returns_never(self):
         ret = Return()
@@ -181,11 +184,188 @@ class TestMakeSeenFn:
         _link(ret, say)
         assert _tl_make_seen_fn([ret]) == ("never",)
 
-    def test_scene_node_walks_forward_to_say(self):
+    def test_scene_then_say_returns_say_descriptor(self):
+        ## Say takes priority over Scene in the same block.
         scene = Scene()
         say = Say("viv")
-        _link(scene, say)
-        assert _tl_make_seen_fn([scene]) == ("say", "viv")
+        assert _tl_make_seen_fn([scene, say]) == ("say", "viv")
+
+    def test_scene_alone_returns_image_descriptor(self):
+        ## Scene with no Say → returns ("image", ...) from the scene image name.
+        scene = Scene()
+        result = _tl_make_seen_fn([scene])
+        assert result[0] == "image"
+
+
+# =============================================================================
+# _tl_say_seen_name — translator resolution
+# =============================================================================
+
+class TestSaySeenName:
+    def setup_method(self):
+        self._translator = _rpy_ns["renpy"].game.script.translator
+        self._orig_map = dict(self._translator._map)
+
+    def teardown_method(self):
+        self._translator._map = self._orig_map
+
+    def test_say_with_no_identifier_returns_node_name(self):
+        node = Say("mc_name")
+        assert _tl_say_seen_name(node) == "mc_name"
+
+    def test_say_with_identifier_no_translation_returns_node_name(self):
+        node = Say("mc_name", identifier="id_001")
+        assert _tl_say_seen_name(node) == "mc_name"
+
+    def test_say_with_identifier_translation_found_returns_translated_name(self):
+        tr_node = TranslateSay("tl_mc_name", identifier="id_001")
+        self._translator._map["id_001"] = tr_node
+        node = Say("mc_name", identifier="id_001")
+        assert _tl_say_seen_name(node) == "tl_mc_name"
+
+    def test_translate_say_with_translation_uses_translated_name(self):
+        tr_node = TranslateSay("tl_elin", identifier="id_002")
+        self._translator._map["id_002"] = tr_node
+        node = TranslateSay("elin_orig", identifier="id_002")
+        assert _tl_say_seen_name(node) == "tl_elin"
+
+
+# =============================================================================
+# _tl_follow_jump_seen_name — jump-hop for cold_castle-style blocks
+# =============================================================================
+
+class TestFollowJumpSeenName:
+    def setup_method(self):
+        self._namemap_saved = dict(_rpy_ns["renpy"].game.script.namemap)
+        _rpy_ns["renpy"].game.script.namemap.clear()
+
+    def teardown_method(self):
+        _rpy_ns["renpy"].game.script.namemap.clear()
+        _rpy_ns["renpy"].game.script.namemap.update(self._namemap_saved)
+
+    def _add_label(self, name, first_node):
+        lbl = Label([])
+        lbl.next = first_node
+        _rpy_ns["renpy"].game.script.namemap[name] = lbl
+
+    def test_unknown_target_returns_none(self):
+        assert _tl_follow_jump_seen_name("nonexistent_label") is None
+
+    def test_label_with_say_returns_say_name(self):
+        say = Say("elin")
+        self._add_label("cold_lab", say)
+        assert _tl_follow_jump_seen_name("cold_lab") == "elin"
+
+    def test_label_with_python_then_say_returns_say_name(self):
+        py = Python("x = 1")
+        say = Say("viv")
+        _link(py, say)
+        self._add_label("lab_py_say", py)
+        assert _tl_follow_jump_seen_name("lab_py_say") == "viv"
+
+    def test_label_with_jump_before_say_returns_none(self):
+        jmp = Jump("elsewhere")
+        say = Say("mc")
+        _link(jmp, say)
+        self._add_label("lab_jump", jmp)
+        assert _tl_follow_jump_seen_name("lab_jump") is None
+
+    def test_label_with_no_content_returns_none(self):
+        self._add_label("empty_lab", None)
+        assert _tl_follow_jump_seen_name("empty_lab") is None
+
+
+# =============================================================================
+# _tl_make_seen_fn — say_range and Show exclusion
+# =============================================================================
+
+class TestMakeSeenFnExtended:
+    def test_multiple_say_nodes_returns_say_range(self):
+        s1 = Say("elin_1")
+        s2 = Say("elin_2")
+        s3 = Say("elin_3")
+        result = _tl_make_seen_fn([s1, s2, s3])
+        assert result == ("say_range", "elin_1", "elin_3")
+
+    def test_two_say_nodes_returns_say_range(self):
+        s1 = Say("a")
+        s2 = Say("b")
+        assert _tl_make_seen_fn([s1, s2]) == ("say_range", "a", "b")
+
+    def test_show_node_excluded_say_survives(self):
+        from conftest import Show
+        show = Show()
+        say = Say("mc")
+        result = _tl_make_seen_fn([say, show])
+        assert result == ("say", "mc")
+
+    def test_show_only_block_returns_never(self):
+        ## Plain Show with no imspec — nothing to check, falls through to ("never",).
+        from conftest import Show
+        result = _tl_make_seen_fn([Show(), Show()])
+        assert result == ("never",)
+
+    def test_show_plain_imspec_returns_never(self):
+        ## Plain shows like `show eileen happy` — all simple identifiers, no expression args.
+        from conftest import Show
+        result = _tl_make_seen_fn([Show("eileen", "happy")])
+        assert result == ("never",)
+
+    def test_show_expr_imspec_returns_image(self):
+        ## Show nodes with expression args (ParameterizedText) produce ("image", raw_parts).
+        ## _seen_images stores raw imspec parts, so no eval is needed at check time.
+        from conftest import Show
+        result = _tl_make_seen_fn([Show("bottom_text012", "_", "('кошмар')")])
+        assert result == ("image", ("bottom_text012", "_", "('кошмар')"))
+
+    def test_show_expr_imspec_lower_priority_than_say(self):
+        from conftest import Show
+        result = _tl_make_seen_fn([Say("mc"), Show("txt", "_", "('hi')")])
+        assert result == ("say", "mc")
+
+    def test_scene_then_say_say_takes_priority(self):
+        result = _tl_make_seen_fn([Scene(), Say("mc")])
+        assert result == ("say", "mc")
+
+    def test_jump_with_no_jump_follow_returns_label(self):
+        jmp = Jump("far_label")
+        result = _tl_make_seen_fn([jmp])
+        assert result == ("label", "far_label")
+
+    def test_jump_with_prior_say_returns_say(self):
+        say = Say("mc")
+        jmp = Jump("far_label")
+        result = _tl_make_seen_fn([say, jmp])
+        assert result == ("say", "mc")
+
+
+# =============================================================================
+# _tl_eval_seen_fn — say_range descriptor
+# =============================================================================
+
+class TestEvalSeenFnSayRange:
+    def setup_method(self):
+        self._seen_ever_saved = _rpy_ns["persistent"]._seen_ever
+
+    def teardown_method(self):
+        _rpy_ns["persistent"]._seen_ever = self._seen_ever_saved
+
+    def test_say_range_first_absent_returns_false(self):
+        _rpy_ns["persistent"]._seen_ever = {"last_name": True}
+        assert _tl_eval_seen_fn(("say_range", "first_name", "last_name")) is False
+
+    def test_say_range_first_seen_last_absent_returns_false(self):
+        _rpy_ns["persistent"]._seen_ever = {"first_name": True}
+        assert _tl_eval_seen_fn(("say_range", "first_name", "last_name")) is False
+
+    def test_say_range_both_seen_returns_true(self):
+        _rpy_ns["persistent"]._seen_ever = {"first_name": True, "last_name": True}
+        assert _tl_eval_seen_fn(("say_range", "first_name", "last_name")) is True
+
+    def test_say_range_single_name_both_same(self):
+        ## When say_range has the same first and last name, behaves like ("say", name)
+        _rpy_ns["persistent"]._seen_ever = {"only_name": True}
+        assert _tl_eval_seen_fn(("say_range", "only_name", "only_name")) is True
 
 
 # =============================================================================

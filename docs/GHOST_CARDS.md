@@ -2,139 +2,117 @@
 
 ## What This Subsystem Is
 
-Ghost cards are ephemeral timeline cards that appear in the timeline screen whenever the game
-evaluates a player-relevant `if` condition between menu choices. They are "ghost" in the sense
-that they are not history nodes — they exist only from the moment the condition fires until the
-next menu, when they are cleared.
+Ghost cards are ephemeral cards that appear in the **route screen** (key `R`) whenever the game evaluates a player-relevant `if` condition between menu choices. They are "ghost" in the sense that they are not history nodes — they exist only from the moment the condition fires until the next menu, when they are cleared.
 
-Each ghost card represents one `if/elif/else` statement the game just evaluated. The card shows
-every branch of that statement, not just the one taken, so the player can see what paths exist
-and whether they have seen each branch before.
+Each ghost card represents one `if/elif/else` statement the game just evaluated. The card shows every branch of that statement, not just the one taken, so the player can see what paths exist and whether they have seen each branch before.
 
-Ghost cards sit below the current-choice row in the timeline screen and are rendered as a grid
-matching the column width of the main card layout.
+Ghost cards appear below the chip bar in the route screen, rendered as a grid. Clusters are shown in reverse chronological order (most recent at top-left). Cards within a cluster maintain left-to-right order.
 
 ## Main Files
 
-- `ui/tl_ghost_cards.rpy` — all ghost card logic: DNF parser, clustering helpers, payload builder, emission, `tl_ghost_rows` screen
-- `timeline_init.rpy` — seen-state helpers (`_tl_make_seen_fn`, `_tl_eval_seen_fn`, `_tl_find_scene_seen_name`), state vars (`_tl_ghost_nodes`, `_tl_ghost_highlight`)
-- `timeline_causal.rpy` — causal hint backend (`_tl_choice_diff_hints`, `_tl_causal_hint`)
-- `timeline_flowchart.rpy`
-- `causal_graph.json`
+- `backend/tl_ghost_logic.rpy` — runtime hook, clustering, payload builder, emission, branch notification
+- `backend/tl_seen_check.rpy` — seen descriptors (`_tl_make_seen_fn`, `_tl_eval_seen_fn`)
+- `ui/tl_ghost_cards.rpy` — `tl_ghost_rows` and `tl_ghost_card` screens
+- `ui/tl_cards.rpy` — `tl_thumbnail_frame` (shared with regular cards)
+- `ui/tl_route_screen.rpy` — renders ghost rows below the chip bar
 
 ## Current Runtime Flow
 
 ```
-renpy.ast.If.execute (monkey-patched)
-    -> _tl_get_taken_branch()
-    -> original RenPy execute
+renpy.ast.If.execute (monkey-patched via _tl_if_execute_patched)
+    -> _tl_get_taken_branch()           — evaluate which branch is taken
+    -> _tl_eval_seen_fn(taken_branch)   — snapshot seen state BEFORE execute
+    -> original RenPy If.execute
     -> _tl_on_if_execute()
-        -> collect sequential sibling If run
-        -> build one payload per sibling If
-        -> partition run into mutually exclusive groups
-        -> emit one ghost cluster per group
+        -> collect sequential sibling If run (_tl_collect_if_run)
+        -> build one payload per sibling If (_tl_build_ghost_payload)
+        -> partition run into mutually exclusive groups (_tl_partition_if_run)
+        -> emit one ghost cluster per group (_tl_emit_ghost_cluster)
         -> record later sibling ast keys in _tl_skip_ghost_ifs
+        -> fire branch notification (_tl_notify_branch)
 ```
 
-Ghost cards are no longer fundamentally “append one card when one `if` runs.” The hook now tries to synthesize the whole relevant sibling run immediately so mutually exclusive sequential `if`s can appear together.
+The hook synthesizes the whole relevant sibling run immediately so mutually exclusive sequential `if`s can appear together as one cluster.
 
 At the next menu (`_tl_record_before`), `_tl_ghost_nodes` and `_tl_ghost_highlight` are cleared.
 
 ## What the UI Shows
 
-Each ghost cluster is rendered below the main timeline rows. The UI flattens the cluster into branch rows.
+Each ghost cluster is a group of branch cards rendered in a grid row. Cards within the same cluster have a faint accent-colored gap between them (`TL["accent"] + "2a"`). Cards from different clusters have a transparent gap instead. A muted divider separates the ghost section from the chip bar above.
 
-Each branch row shows:
+Each branch card shows:
 
-- the branch condition string (clickable — toggles causal highlight)
-- the branch thumbnail image, if found
+- a thumbnail image (resolved from Scene/Show in the branch block, or a jump-hop fallback)
+- the branch condition string as a label below the thumbnail (clickable — toggles highlight)
 
-Overlay rules (applied to the thumbnail):
+**Overlay rules** (applied to the thumbnail):
 
-- Type-1 — branch taken this play: no overlay
-- Type-2 — branch not taken, but seen in a previous play: lighter semi-transparent dark overlay (`#00000099`), no lock
-- Type-3 — branch never seen: dark overlay (`#000000bb`) + white lock icon centered
+- **Taken** (`bi == taken_index`): no overlay, no lock
+- **Seen but not taken** (previously played via a different save/branch): semi-transparent dark overlay (`#000000aa`), no lock
+- **Never seen**: dark overlay (`#000000bb`) + lock icon centered (36×36, fit contain)
 
-The `→` and `●` text indicators have been removed. State is communicated entirely through overlay opacity and the lock icon.
-
-Cluster separator: a 3 px left border rendered inside the first card of each new cluster. Zero layout-width impact — card width is always `card_w`. Inter-card gaps within a cluster are filled with a faint accent-colored frame; inter-cluster gaps use a transparent frame (`null` does not render correctly inside nested `if`/`for` in RenPy screen language, hence the transparent frame).
+A 3px accent bar at the top edge is shown when a card is highlighted (toggled by clicking the condition label).
 
 ## Payload Shape
 
-`store._tl_ghost_nodes` is a list of cluster dicts. A typical entry looks like:
+`store._tl_ghost_nodes` is a list of cluster dicts. Each entry:
 
 ```python
 {
-    "type": "branch",
-    "ast_key": (filename, linenumber),
-    "conditions": [...],
-    "seen_fns": [...],
-    "taken_index": ...,
-    "affecting_vars": [...],
-    "branch_imgs": [...],
-    "causal_hints": [...],
-    "causal_hl_keys": [...],
-    "member_ast_keys": [...],
-    "cluster_with_prev": False,
+    "type":              "branch",
+    "ast_key":           (filename, linenumber),   # root If node of the cluster
+    "conditions":        [...],                    # one condition string per branch
+    "seen_fns":          [...],                    # one seen descriptor tuple per branch
+    "taken_index":       int or None,              # index of taken branch (None if standalone)
+    "affecting_vars":    [...],                    # vars referenced in conditions
+    "branch_imgs":       [...],                    # one image name (or None) per branch
+    "cluster_with_prev": bool,                     # True = visually grouped with previous cluster
+    "_regions":          [...],                    # DNF region dicts for clustering logic
+    "member_ast_keys":   [...],                    # ast_keys of all If nodes in this cluster
 }
 ```
 
-## Causal Hint Backend
-
-The current runtime hint path is graph-based, not old `write_map`-based.
-
-`_tl_choice_diff_hints(condition_str)` in `timeline_causal.rpy` reads `causal_graph.json`,
-matches the target condition against the current history, and returns paired diff records:
-
-- `kind`
-  - `direct`
-  - `path`
-- `menu_ast_key`
-- `original_idx`
-- `required_idx`
-
-Ghost-card rows use those results to highlight upstream timeline cards and to explain both:
-
-- direct satisfier choice changes
-- prerequisite path/split changes
-
 ## Seen Logic
 
-Ghost cards do not use `seen_label` anymore.
+Seen state uses descriptor tuples built by `_tl_make_seen_fn(block)` in `backend/tl_seen_check.rpy`. The descriptor is evaluated at render time via `_tl_eval_seen_fn`. Descriptor types:
 
-Ghost branches use seen descriptors built by `_tl_make_seen_fn(block)` (in `timeline_init.rpy`). It walks the branch block looking for the first *named-character* `Say` node (narrator lines are skipped), then returns a descriptor tuple checked against `persistent._seen_ever` at render time via `_tl_eval_seen_fn`.
+- `("say", name)` — single Say node key in `persistent._seen_ever`
+- `("say_range", first, last)` — fast-fail on first, confirm with last
+- `("image", name_tuple)` — Scene bg or expr-Show; checked via `renpy.seen_image`
+- `("label", target)` — fallback: `renpy.seen_label`
+- `("never",)` — always unseen (unresolvable branch)
 
-`_tl_make_scene_seen_fn` (scene-only variant) still exists but is no longer used for ghost payloads — it missed branches that start with a plain say, jump, or call before reaching a scene.
+The taken branch descriptor is evaluated **before** `If.execute` runs (pre-execute snapshot) to avoid `_seen_images` pollution from synchronous `Scene.execute`. This is what `pre_taken_seen` carries into `_tl_notify_branch`.
 
-`_tl_build_ghost_payload` calls `_tl_make_seen_fn` directly.
+## Branch Notification
 
-The flowchart uses the same `_tl_make_seen_fn` helper, so ghost-card lock state and flowchart seen/unlocked state are aligned.
+`_tl_notify_branch` fires once per If-run via `renpy.show_screen("_tl_notify", ...)`:
+
+- **suppress** — all branches seen (including taken): no notification
+- **icon** — taken branch seen, ≥1 alternative never seen: `⎇` icon only
+- **new_path** — taken branch itself was never taken before: `⎇ New path`
 
 ## Important Invariants
 
 - Ghost cards are transient and clear at the next menu.
 - Only player-relevant `if` regions that parse to valid DNF regions produce ghost payloads.
-- Later sibling `if`s in a synthesized run must be added to `_tl_skip_ghost_ifs` so they do not duplicate when runtime reaches them.
-- Ghost lock/overlay state is driven by `_tl_make_seen_fn`, not label-based seen checks.
-- The taken branch shows no overlay and no lock; state is communicated through overlay type, not a text indicator.
+- Later sibling `if`s in a synthesized run are added to `_tl_skip_ghost_ifs` to prevent duplication.
+- Ghost lock/overlay state is driven by `_tl_make_seen_fn` descriptors, not `renpy.seen_label`.
+- The taken branch shows no overlay; state is communicated through overlay opacity and the lock icon only.
 
 ## Known Limits
 
-- `UserStatement` / image-menu style control flow is still not ghost-tracked like plain `If` nodes.
-- Ghost cards are not persisted into history; they only exist until the next menu.
-- Branches without a meaningful named-character say node currently fall back to unseen for ghost lock purposes.
-- The sibling-run partitioning is intentionally conservative and driven by the current DNF parser; non-simple condition forms may stay unclustered.
+- `UserStatement` / image-menu style control flow is not ghost-tracked.
+- Ghost cards are not persisted into history; they clear at the next menu.
+- Branches without a resolvable Say/Scene/Show/Jump fallback get `("never",)` and always show as locked.
+- Sibling-run partitioning is intentionally conservative; non-simple condition forms may stay unclustered.
 
 ## Where To Edit
 
-- runtime hook / clustering behavior / ghost-card rendering
-  - `ui/tl_ghost_cards.rpy`
-- seen-state helpers (`_tl_make_seen_fn`, `_tl_eval_seen_fn`, `_tl_find_scene_seen_name`)
-  - `timeline_init.rpy`
-- causal hint backend (`_tl_choice_diff_hints`, `_tl_causal_hint`)
-  - `timeline_causal.rpy`
-- flowchart seen/unlock alignment
-  - `timeline_flowchart.rpy`
-- offline hint generation inputs
-  - `tools/causal_analysis.py`
-  - `causal_graph.json`
+| Task | File |
+|------|------|
+| Runtime hook, clustering, payload build, emission | `backend/tl_ghost_logic.rpy` |
+| Seen descriptors, eval logic | `backend/tl_seen_check.rpy` |
+| Ghost card UI screens (`tl_ghost_rows`, `tl_ghost_card`) | `ui/tl_ghost_cards.rpy` |
+| Thumbnail frame overlays (shared with regular cards) | `ui/tl_cards.rpy` |
+| Ghost rows render location (below chip bar) | `ui/tl_route_screen.rpy` |

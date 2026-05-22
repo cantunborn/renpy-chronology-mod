@@ -9,10 +9,18 @@ init -1 python:
             return None  ## store defaults not yet applied (pre-game-start menu)
         global _tl_branch_id, _tl_node_count, _tl_history, _tl_context
 
+        ## Flush immediate var changes (non-init) and init-in-arm changes (from menu snap).
+        try:
+            _tl_flush_var_changes()
+            _tl_flush_menu_snap()
+        except Exception:
+            pass
+
         ## Ghost nodes accumulated since last menu are now resolved — clear them.
-        store._tl_ghost_nodes     = []
-        store._tl_ghost_highlight = None
-        store._tl_skip_ghost_ifs  = set()
+        store._tl_ghost_nodes          = []
+        store._tl_ghost_highlight      = None
+        store._tl_skip_ghost_ifs       = set()
+        store._tl_recently_changed_vars = set()
 
         ## Refresh any early save now that we're past any untracked menus
         ## (image menus, call screens) that may have fired since the save was written.
@@ -176,6 +184,12 @@ init -1 python:
         _tl_history    = _tl_history + [node]
         _tl_node_count += 1
 
+        ## Snapshot all route vars (including None) for next-menu var-change detection.
+        try:
+            store._tl_menu_var_snap = _tl_snapshot_route_vars()
+        except Exception:
+            pass
+
         return node
 
 
@@ -249,7 +263,6 @@ init -1 python:
                         ## for the "Autoplay from here?" button, but the player must
                         ## opt in manually. No automatic shadow replay activation.
                         config.skipping = None
-                        renpy.game.preferences.skip_unseen = False
                         renpy.save_persistent()
 
                         ## Populate _choice_returns so get_chosen() works correctly
@@ -382,7 +395,6 @@ init python:
             ## must set it again here. Not needed for rollback path since
             ## rollback doesn't trigger after_load_callbacks.
             config.skipping = "fast"
-            renpy.game.preferences.skip_unseen = True
             ## Transfer shadow path from persistent staging into the store now that
             ## the checkpoint load is complete (store vars were overwritten by load).
             if persistent._tl_pending_shadow_path is not None:

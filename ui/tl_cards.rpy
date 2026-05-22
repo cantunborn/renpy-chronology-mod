@@ -46,7 +46,7 @@ screen tl_thumbnail_frame(cw, th, img_disp=None, locked=False, taken=True, highl
             frame:
                 xfill True
                 yfill True
-                background Solid("#00000099")
+                background Solid("#000000aa")
 
         if highlighted:
             add Solid(TL["accent"]):

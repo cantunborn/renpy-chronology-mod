@@ -66,6 +66,10 @@ jobs:
                   pass
               elif line.strip().startswith("|") and line.strip().endswith("|"):
                   cells = [c.strip() for c in line.strip().strip("|").split("|")]
+                  cells = [re.sub(r'\*\*(.+?)\*\*', r'\1', c) for c in cells]
+                  cells = [re.sub(r'\*(.+?)\*',     r'\1', c) for c in cells]
+                  cells = [re.sub(r'`(.+?)`',        r'\1', c) for c in cells]
+                  cells = [re.sub(r'\[(.+?)\]\(.+?\)', r'\1', c) for c in cells]
                   out.append("  ".join(f"{c:<20}" for c in cells).rstrip())
               else:
                   line = re.sub(r'\*\*(.+?)\*\*', r'\1', line)
