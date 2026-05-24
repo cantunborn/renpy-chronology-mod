@@ -5,10 +5,14 @@
 
 ## =============================================================================
 ## Mod notification screen — separate from the game's screen notify so we
-## don't affect game-side notifications at all.  Uses !t (not !tq) so that
-## {font=} tags in the message string are parsed rather than escaped.
-## Plain notification text (no tags) renders identically to the engine default.
+## don't affect game-side notifications at all.
+##
+## Font: FontGroup that uses the game's default font for all characters, with
+## DejaVuSans overriding only the arrow/bullet codepoints the game font may lack.
+## This avoids inline {font=} tag switches (which cause baseline misalignment)
+## while still rendering correctly on games whose fonts include these glyphs.
 ## =============================================================================
+
 
 transform _tl_notify_appear:
     on show:
@@ -21,7 +25,8 @@ screen _tl_notify(message):
     zorder 100
     style_prefix "notify"
     frame at _tl_notify_appear:
-        text "[message!t]"
+        text "[message!t]":
+            font _tl_fontgroup
     timer 3.25 action Hide('_tl_notify')
 
 

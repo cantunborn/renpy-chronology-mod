@@ -62,6 +62,16 @@ class TestExtractVarsFromConditions:
         result = _extract(["MyClass and my_var"])
         assert result == {"my_var"}
 
+    def test_bare_truthy_var(self):
+        assert _extract(["wendyRat"]) == {"wendyRat"}
+
+    def test_camel_case_var(self):
+        result = _extract(["wendyRat == 1 and katieSeduced"])
+        assert result == {"wendyRat", "katieSeduced"}
+
+    def test_bare_not_var(self):
+        assert _extract(["not wendyRat"]) == {"wendyRat"}
+
     def test_string_literal_content_not_picked_up(self):
         result = _extract(["foo == 'bar_baz'"])
         assert result == {"foo"}

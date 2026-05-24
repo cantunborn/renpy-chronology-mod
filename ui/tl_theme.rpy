@@ -164,44 +164,36 @@ init python:
 ## =============================================================================
 
 init python:
-    import os as _os
-
-    default_font = None
-    default_bold  = None
-
     try:
-        default_font = getattr(gui, "text_font", None)
+        _tl_font_reg  = getattr(gui, "text_font", None) or "renpy-chronology-mod/fonts/Inter-Regular.ttf"
+        _tl_font_bold = getattr(gui, "name_text_font", None) or getattr(gui, "interface_text_font", None) or "renpy-chronology-mod/fonts/Inter-Bold.ttf"
     except Exception:
-        default_font = None
-
-    try:
-        default_bold = getattr(gui, "name_text_font", None) or getattr(gui, "interface_text_font", None)
-    except Exception:
-        default_bold = None
-
-    if default_font:
-        _tl_font_reg = default_font
-    else:
-        _tl_font_reg = "renpy-chronology-mod/fonts/Inter-Regular.ttf"
-
-    if default_bold:
-        _tl_font_bold = default_bold
-    else:
+        _tl_font_reg  = "renpy-chronology-mod/fonts/Inter-Regular.ttf"
         _tl_font_bold = "renpy-chronology-mod/fonts/Inter-Bold.ttf"
 
-    _tl_mod_abs = _os.path.join(renpy.config.gamedir, "renpy-chronology-mod", "fonts")
-    if not _tl_font_reg or not _tl_font_bold:
-        if not _os.path.exists(_os.path.join(_tl_mod_abs, "Inter-Regular.ttf")):
-            if _os.path.exists(_os.path.join(_tl_mod_abs, "InterVariable.ttf")):
-                _tl_font_reg  = "renpy-chronology-mod/fonts/InterVariable.ttf"
-                _tl_font_bold = "renpy-chronology-mod/fonts/InterVariable.ttf"
-            else:
-                _tl_font_reg  = "DejaVuSans.ttf"
-                _tl_font_bold = "DejaVuSans-Bold.ttf"
+    ## FontGroups: DejaVuSans covers special glyph ranges; game/Inter font handles everything else.
+    ## DejaVuSans ranges must be added first — first match wins.
+    _TL_GLYPH_RANGES = [
+        (0x00B7, 0x00B7),   ## · middle dot
+        (0x2190, 0x21FF),   ## ↑ ↓ → ↺ arrows
+        (0x2387, 0x2387),   ## ⎇ branch
+        (0x2715, 0x2715),   ## ✕ close
+        (0x25BE, 0x25BE),   ## ▾ down triangle
+        (0x25CF, 0x25CF),   ## ● filled circle
+    ]
+
+    def _tl_make_fontgroup(base):
+        fg = FontGroup()
+        for _start, _end in _TL_GLYPH_RANGES:
+            fg = fg.add("DejaVuSans.ttf", _start, _end)
+        return fg.add(base, 0, 0x10FFFF)
+
+    _tl_fontgroup      = _tl_make_fontgroup(_tl_font_reg)
+    _tl_bold_fontgroup = _tl_make_fontgroup(_tl_font_bold)
 
 
 style tl_base is text:
-    font _tl_font_reg
+    font _tl_fontgroup
     size TL_SIZE_BODY
     color "#f0ece4"
     italic False
@@ -214,7 +206,7 @@ style tl_base is text:
     layout "tex"
 
 style tl_base_bold is text:
-    font _tl_font_bold
+    font _tl_bold_fontgroup
     size TL_SIZE_BODY
     color "#f0ece4"
     italic False
@@ -226,7 +218,7 @@ style tl_base_bold is text:
     kerning 0.0
 
 style tl_icon is text:
-    font "DejaVuSans.ttf"
+    font _tl_fontgroup
     size TL_SIZE_DOT
     color "#f0ece4"
     italic False

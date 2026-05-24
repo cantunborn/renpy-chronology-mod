@@ -7,6 +7,34 @@ that is present in the codebase but not yet committed.
 
 ## Unreleased
 
+### Refactor: Font system — centralize into shared FontGroups in tl_theme.rpy
+
+- **`ui/tl_theme.rpy`** — replaced the 35-line font resolution init block (which had a dead InterVariable/DejaVuSans fallback branch) with a clean 5-line resolution, then builds `_tl_fontgroup` and `_tl_bold_fontgroup` via `_tl_make_fontgroup(base)`. The helper adds DejaVuSans overrides for six glyph ranges (middle dot U+00B7, arrows U+2190–U+21FF, branch ⎇ U+2387, close ✕ U+2715, down-triangle ▾ U+25BE, filled circle ● U+25CF) before falling back to the game/Inter base font. `style tl_base`, `style tl_base_bold`, and `style tl_icon` all now use the shared fontgroups.
+- **`ui/tl_route_screen.rpy`** — removed the local `_tl_notify_font` init block; `_tl_notify` screen now uses `_tl_fontgroup` from `tl_theme.rpy` (loads first alphabetically).
+- **`backend/tl_ghost_logic.rpy`** — stripped `{font=DejaVuSans.ttf}⎇{/font}` tags from both `_tl_notify_branch` show_screen calls; bare `⎇` character now renders correctly via `_tl_fontgroup`.
+- **`timeline_screen.rpy`** — removed two inline `font "DejaVuSans.ttf"` overrides on ↺ and → text nodes; covered by `style tl_base` FontGroup.
+- **`ui/tl_cards.rpy`** — removed `{font=DejaVuSans.ttf}▾{/font}` tag from the "All options" button text; covered by `style tl_base` FontGroup.
+
+### Fix: Var change notifications — batch via interact_callback instead of per-Python-block flush
+
+- **`timeline_hooks.rpy`** — `_tl_interact_callback` now calls `_tl_flush_var_changes()` at the top of its body. Previously `_tl_python_execute_patched` flushed immediately after every Python block, so consecutive assignments within one script segment each replaced the previous notification — the player only saw the last one. Accumulating through `_tl_pending_var_changes` and flushing once per interaction means all changes in a segment appear in one batched notification.
+- **`backend/tl_ghost_logic.rpy`** — removed the immediate `_tl_flush_var_changes()` call from `_tl_python_execute_patched`; now only calls `_tl_diff_route_vars` to accumulate.
+
+### Fix: Route chip tooltip — include declared default value in domain
+
+- **`backend/tl_route_logic.rpy`** — after the Default-node walk, each captured default value is now seeded into `_domain` via `_domain.setdefault(var, set()).add(str(default_val))`. Previously the tooltip only showed values collected from Python assignments and If-condition comparisons; vars whose starting value is only declared via `default varname = value` (and never explicitly assigned in a Python block or compared in a condition) would show an empty domain. The declared default is now always present as a domain entry.
+
+### Fix: camelCase var extraction in ghost conditions — shift to AST parser
+
+- **`backend/tl_ghost_logic.rpy`** — `_tl_extract_vars_from_conditions` replaced regex walk with `ast.parse(cond, mode="eval")` + `ast.Name` node walk. The previous regex `[a-z_][a-z0-9_]*` only matched all-lowercase sequences; camelCase vars (e.g. `wendyRat`) and bare truthy checks (e.g. `if wendyRat:`) were silently dropped, producing an empty `affecting_vars` list and hiding the chip even when highlighted. AST handles all expression forms correctly.
+- **`backend/tl_ghost_logic.rpy`** — added always-on log when `affecting_vars` is empty despite non-trivial conditions, to catch future extraction regressions without needing debug flags.
+- **`tests/test_ghost_logic.py`** — added three cases to `TestExtractVarsFromConditions`: bare truthy var, camelCase var in equality + bare truthy combination, and `not var` form.
+
+### Fix: Route chips — show ghost-highlighted vars that are only declared via `default`
+
+- **`backend/tl_route_logic.rpy`** — `_tl_build_route_chips` now appends highlighted vars that are present in `persistent._tl_var_defaults` but absent from `persistent._tl_route_var_names`. Such vars are declared via `default varname = value` and only read in If conditions — never `$`-assigned — so the Python-node walk never collected them into `_tl_route_var_names`. They are valid route vars and should appear as chips when a ghost card references them.
+- **`backend/tl_route_logic.rpy`** — added `TL_DEBUG_ROUTE`-gated log listing vars added via this path.
+
 ### Fix: Conditional menu options — node["options"] now contains only available choices
 
 - **`timeline_hooks.rpy`** — `_tl_record_before` now filters options by condition at record time. Prompt detected by `block is None` (entry[2]). Available options: `cond` truthy (`True`, `"True"`, `None`). Locked options: `cond` falsy (`False`, `"False"`) or `py_eval(cond_str)` returns False. Previously `entry[2]` (an integer AST index, never `False`) caused all options to pass regardless of lock state, misaligning `chosen_index` with the available list.
@@ -16,7 +44,14 @@ that is present in the codebase but not yet committed.
 
 ### Fix: Route chip filtering — hide vars still at declared default value
 
-- **`backend/tl_route_logic.rpy`** — added `Default` AST node walk in `_tl_build_route_index`; captures scalar (`bool`, `int`, `float`, `str`) default values into `store._tl_var_defaults` (store, not persistent — rebuilt each session). In `_tl_build_route_chips`, vars whose current value equals their declared default are hidden unless ghost-highlighted or recently-changed. Non-scalar defaults (Character objects, dicts, etc.) are skipped at eval time to avoid persistence errors.
+- **`backend/tl_route_logic.rpy`** — added `Default` AST node walk in `_tl_build_route_index`; captures scalar (`bool`, `int`, `float`, `str`) default values into `persistent._tl_var_defaults`. In `_tl_build_route_chips`, vars whose current value equals their declared default are hidden unless ghost-highlighted or recently-changed. Non-scalar defaults (Character objects, dicts, etc.) are skipped at eval time to avoid persistence errors.
+- **`backend/tl_route_logic.rpy`** — moved default values dict from `store._tl_var_defaults` to `persistent._tl_var_defaults`. Store-declared vars are restored from the save file on load, overwriting values set during init; persistent survives the load cycle so defaults are available immediately after AST walk.
+- **`timeline_init.rpy`** — removed `default _tl_var_defaults = {}` declaration (now persistent).
+- **`tests/conftest.py`** — added `_tl_var_defaults={}` to persistent stub; updated `test_route_logic.py` references from `store` to `persistent`.
+
+### Fix: AST scene-map walk crash when `persistent._tl_menu_scene_map` is None
+
+- **`timeline_init.rpy`** — added guard before the `_mk not in persistent._tl_menu_scene_map` walk: if `persistent._tl_menu_scene_map is None`, initialize to `{}`. Prevents `TypeError: argument of type 'NoneType' is not iterable` on first launch before any persistent data exists.
 
 ### Fix: Route chip filtering — remove consumed/if_count hide rules
 
@@ -91,7 +126,7 @@ that is present in the codebase but not yet committed.
 
 ### Fix: Numeric var change notification — show delta magnitude
 
-- **`backend/tl_route_logic.rpy`** — added `_tl_format_numeric_change(label, old_val, new_val)`: formats numeric var changes as `↑N Label` or `↓N Label`. When the delta is exactly 1, the magnitude is omitted (`↑ Label`). Arrows use `{font=DejaVuSans.ttf}` for correct Unicode rendering. `_tl_flush_var_changes` and `_tl_flush_menu_snap` both use this helper for vars in `persistent._tl_var_is_numeric`.
+- **`backend/tl_route_logic.rpy`** — added `_tl_format_numeric_change(label, old_val, new_val)`: formats numeric var changes as `↑N Label` or `↓N Label`. When the delta is exactly 1, the magnitude is omitted (`↑ Label`). `_tl_flush_var_changes` and `_tl_flush_menu_snap` both use this helper for vars in `persistent._tl_var_is_numeric`.
 
 ### Fix: Python.execute patch — restrict to game scripts, guard post-processing
 

@@ -96,15 +96,20 @@ init python:
 
     def _tl_extract_vars_from_conditions(conditions):
         """Return the set of game-variable names referenced across all condition strings."""
+        import ast as _ast
         out = set()
         for cond in conditions:
             if cond in ("True", "False", "None"):
                 continue
-            cleaned = _TL_STR_LIT_RE.sub('', cond)
-            for m in _TL_VAR_RE.finditer(cleaned):
-                name = m.group(1)
-                if name not in _TL_KW_SKIP and not name[0].isupper():
-                    out.add(name)
+            try:
+                tree = _ast.parse(cond, mode="eval")
+            except SyntaxError:
+                continue
+            for node in _ast.walk(tree):
+                if isinstance(node, _ast.Name):
+                    name = node.id
+                    if name not in _TL_KW_SKIP and not name[0].isupper():
+                        out.add(name)
         return out
 
     ## ── Mutual exclusivity clustering ────────────────────────────────────────
@@ -309,6 +314,11 @@ init python:
             return None
 
         affecting_vars = _tl_extract_vars_from_conditions(conditions)
+        if not affecting_vars and any(c not in ("True", "False", "None") for c in conditions):
+            _tl_log("TL ghost payload: no vars extracted from conditions={} key=({},{})".format(
+                conditions,
+                getattr(if_node, "filename", "?"),
+                getattr(if_node, "linenumber", "?")))
 
         ## branch_imgs resolved cluster-wide in _tl_collect_if_run after payload build
         branch_imgs = []
@@ -635,7 +645,7 @@ init python:
             ## descriptors aren't polluted by Scene updates from this very execution.
             if pre_taken_seen is False:
                 _tl_log("TL notify: tier=new_path taken_seen=False")
-                renpy.show_screen("_tl_notify", message="{font=DejaVuSans.ttf}⎇{/font} New path")
+                renpy.show_screen("_tl_notify", message="⎇ New path")
                 return
 
             ## ⎇ icon-only: at least one non-taken branch in the cluster is locked.
@@ -647,7 +657,7 @@ init python:
             )
             if _locked > 0:
                 _tl_log("TL notify: tier=icon locked={}".format(_locked))
-                renpy.show_screen("_tl_notify", message="{font=DejaVuSans.ttf}⎇{/font}")
+                renpy.show_screen("_tl_notify", message="⎇")
             else:
                 _tl_log("TL notify: tier=suppress")
             ## all branches seen — suppress
@@ -670,8 +680,6 @@ init python:
         _result = _tl_orig_python_execute(self)
         try:
             _tl_diff_route_vars(_snap)
-            if getattr(store, "_tl_pending_var_changes", None):
-                _tl_flush_var_changes()
         except Exception as _e:
             _tl_log("TL python_execute post-processing error: {}".format(_e))
         return _result

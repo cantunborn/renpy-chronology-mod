@@ -218,7 +218,6 @@ screen timeline():
                             text "↺":
                                 style "tl_base"
                                 size TL_SIZE_BODY
-                                font "DejaVuSans.ttf"
                                 color TL["header_sub"]
                                 hover_color TL["accent"]
                                 yalign 0.5
@@ -385,7 +384,6 @@ screen timeline():
                                     text "→":
                                         style "tl_base"
                                         size TL_SIZE_BODY
-                                        font "DejaVuSans.ttf"
                                         color _tt_val_color
                                         yalign 0.5
                                 else:

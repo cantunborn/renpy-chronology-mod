@@ -104,8 +104,7 @@ Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` and `renpy.ast.Pytho
 
 **Constants:**
 - `_TL_KW_SKIP` — set of Python keyword strings to skip during condition prettification
-- `_TL_STR_LIT_RE` — compiled regex for string literals
-- `_TL_VAR_RE` — compiled regex for variable identifiers
+- `_TL_STR_LIT_RE` — compiled regex for string literals (used by `_tl_prettify_condition`; no longer used for var extraction)
 
 **Functions:**
 
@@ -119,7 +118,7 @@ Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` and `renpy.ast.Pytho
 | `_tl_branch_exits_before_next` | `(block) → bool` | Returns True when a taken branch clearly exits before sibling ifs can run (explicit Jump/Return). |
 | `_tl_extend_ghost_rows` | `(ghost, ast_key, conditions, seen_fns, branch_imgs, regions, affecting_vars=None) → None` | Appends hidden sibling-if rows into an existing ghost card dict. |
 | `_tl_toggle_ghost_highlight` | `(ast_key, branch_idx) → None` | Toggles ghost branch row highlight on/off in `_tl_ghost_highlight`. |
-| `_tl_extract_vars_from_conditions` | `(conditions) → set` | Extracts variable names from a list of condition strings via regex. Filters out Python builtins and names starting with `_`. Used to populate `affecting_vars` in ghost payloads and to build the route index. |
+| `_tl_extract_vars_from_conditions` | `(conditions) → set` | Extracts variable names from a list of condition strings via `ast.parse`. Walks `ast.Name` nodes; filters out `_TL_KW_SKIP` builtins and names starting with uppercase. Handles bare truthy checks, camelCase names, boolean ops, comparisons, and `not` correctly. Used to populate `affecting_vars` in ghost payloads and to build the route index. |
 | `_tl_prettify_var` | `(name) → str` | Converts a snake_case var name to a readable label. Strips common prefixes (`mc_`, `flag_`, `is_`, `has_`, `ch_`), splits on `_`, and title-cases each word. Example: `mc_affection_bonus` → `Affection Bonus`. |
 | `_tl_prettify_condition` | `(cond) → str` | Prettifies snake_case var names and strips quotes from string values using `ast.parse`. `Name` nodes → `_tl_prettify_var`; `Constant` string nodes → bare value (no quotes); numeric constants left as-is. Applies replacements right-to-left by `col_offset`. Falls back to regex on parse failure. Example: `route_id == "romance"` → `Route Id == romance`. |
 | `_tl_get_taken_branch` | `(if_node) → int` | Evaluates conditions in order and returns the index of the first True one. |
@@ -144,7 +143,7 @@ Route tracker backend: AST index build, chip filtering/ordering, snapshot/diff/f
 - `persistent._tl_route_var_names` — list of var names assigned anywhere in game scripts
 - `persistent._tl_var_if_count` — `{var_name: int}`; total If-entries referencing each var across the whole game
 - `persistent._tl_if_key_to_vars` — `{(file, line): [var_names]}`; reverse map from If AST key to vars it tests
-- `persistent._tl_var_domain` — `{var_name: sorted_list_of_str}`; all known literal values a var takes
+- `persistent._tl_var_domain` — `{var_name: sorted_list_of_str}`; all known literal values a var takes; sourced from Python assignment RHS literals, If-condition equality comparisons, and declared `default` values
 - `persistent._tl_var_is_numeric` — `set`; var names classified as numeric (assigned via arithmetic)
 
 **Store variables (transient):**
@@ -152,15 +151,15 @@ Route tracker backend: AST index build, chip filtering/ordering, snapshot/diff/f
 - `store._tl_recently_changed_vars` — `set`; vars changed since last menu; cleared at each `_tl_record_before`
 - `store._tl_menu_var_snap` — `{var: value}`; snapshot taken at menu-present time for init-assign detection
 - `store._tl_var_if_seen_keys` — `{var_name: set(ast_key)}`; tracks which If-node AST keys have been executed this session per var; used by `_tl_var_consumed` to determine whether all branches referencing a var have been hit
-- `store._tl_var_defaults` — `{var_name: scalar}`; declared default values from `default` AST nodes (scalar only: bool/int/float/str); rebuilt each session; used by `_tl_build_route_chips` to hide vars still at their declared default
+- `persistent._tl_var_defaults` — `{var_name: scalar}`; declared default values from `default` AST nodes (scalar only: bool/int/float/str); written at AST-walk time; survives save/load; used by `_tl_build_route_chips` to hide vars still at their declared default
 
 **Functions:**
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `_tl_build_route_index` | `(nodes) → None` | Full iterative block walk from Label entry points. Three passes: Python-node (collect var names, numeric detection, domain literals), Default-node (capture scalar declared defaults into `store._tl_var_defaults`), and If-node (accumulate `if_count`, build seen descriptors per branch). Writes all five persistent keys listed above plus `store._tl_var_defaults`. |
+| `_tl_build_route_index` | `(nodes) → None` | Full iterative block walk from Label entry points. Three passes: Python-node (collect var names, numeric detection, domain literals from RHS), Default-node (capture scalar declared defaults into `persistent._tl_var_defaults`; also seeds each default value into `_domain` so the tooltip shows the starting value even for vars never explicitly assigned), and If-node (accumulate `if_count`, collect domain values from equality comparisons). Writes all five persistent keys listed above. |
 | `_tl_var_consumed` | `(var_name) → bool` | True if `len(_tl_var_if_seen_keys[var]) >= _tl_var_if_count[var]` — every If-entry referencing this var has been visited this session. Returns False when `if_count == 0`. |
-| `_tl_build_route_chips` | `() → list[(str, Any)]` | Filter and sort route vars for chip bar display. Hides vars with None values, non-scalar values, and vars still at their declared default (from `store._tl_var_defaults`) unless ghost-highlighted or recently-changed. Sorts highlighted (ghost/recently-changed) vars first by `if_count` desc, then remaining by `if_count` desc. |
+| `_tl_build_route_chips` | `() → list[(str, Any)]` | Filter and sort route vars for chip bar display. Hides vars with None values, non-scalar values, and vars still at their declared default (from `persistent._tl_var_defaults`) unless ghost-highlighted or recently-changed. Also includes highlighted vars present in `persistent._tl_var_defaults` but absent from `persistent._tl_route_var_names` (declared via `default`, only read in conditions, never `$`-assigned). Sorts highlighted (ghost/recently-changed) vars first by `if_count` desc, then remaining by `if_count` desc. |
 | `_tl_snapshot_route_vars` | `() → dict` | Returns `{var: getattr(store, var, None)}` for all `persistent._tl_route_var_names`. |
 | `_tl_diff_route_vars` | `(snap) → None` | Compares current store values against snapshot. Skips unchanged and init vars (old was None). Accumulates into `store._tl_pending_var_changes`; keeps original `old_val` if var already pending. Adds changed vars to `_tl_recently_changed_vars`. |
 | `_tl_format_numeric_change` | `(label, old_val, new_val) → str` | Returns `"↑N Label"` or `"↓N Label"`. Omits magnitude when delta is exactly 1. Strips `.0` from integer deltas. Uses DejaVuSans font tags for arrow glyphs. |
@@ -326,7 +325,7 @@ Menu interception, save callbacks, replay wrapper, and ghost card hook. Runs at 
 | `_tl_store_wrapper` | `(items) → choice` | Wraps `renpy.store.menu`; handles replay interception (auto-pick at target, skip through path), shadow path match/consume, choice recording. |
 | `_tl_on_game_start` | `() → None` | Registered `start_callback`; clears replay state; writes `_ch_start` save. |
 | `_tl_on_load` | `() → None` | Registered `after_load_callback`; clears stale replay state or resumes valid replay; re-enables skip; restores shadow path from `persistent._tl_pending_shadow_path`; migrates img_names. |
-| `_tl_interact_callback` | `() → None` | Registered `interact_callback`; writes deferred checkpoint save if `_tl_pending_save_index` is set and not currently skipping. |
+| `_tl_interact_callback` | `() → None` | Registered `interact_callback`; flushes all accumulated var changes via `_tl_flush_var_changes()` (batched since last interact); writes deferred checkpoint save if `_tl_pending_save_index` is set and not currently skipping. |
 | `_tl_chapter_label_cb` | `(label_name, abnormal) → None` | Registered `label_callback`; fires when any chapter end label is reached; records `{chapter_name, end_label, after_index}` marker; writes `_ch_chap_{label}_{hash}` save if it doesn't exist on disk. |
 
 ---
@@ -461,9 +460,13 @@ Design tokens, color contrast helpers, styles, and hover gradient generation.
 **Font size constants** (also defined in `timeline_init.rpy` for backend use):
 - `TL_SIZE_BODY = 21`, `TL_SIZE_TITLE = 38`, `TL_SIZE_DOT = 14`, `TL_SIZE_BADGE = 12`, `TL_SIZE_HEADER = 28`, `TL_SIZE_SUBTITLE = 17`
 
-**Font paths:**
-- `_tl_font_reg` — Inter-Regular.ttf path or RenPy default fallback
-- `_tl_font_bold` — Inter-Bold.ttf path or RenPy default fallback
+**Font paths and FontGroups:**
+
+- `_tl_font_reg` — resolved regular font: `gui.text_font` if set, else `renpy-chronology-mod/fonts/Inter-Regular.ttf`
+- `_tl_font_bold` — resolved bold font: `gui.name_text_font` / `gui.interface_text_font` if set, else `Inter-Bold.ttf`
+- `_tl_make_fontgroup(base)` — builds a `FontGroup` with DejaVuSans overrides for six glyph ranges (· arrows ⎇ ✕ ▾ ●) before the base font catch-all; first-added range wins
+- `_tl_fontgroup` — `_tl_make_fontgroup(_tl_font_reg)`; used by `style tl_base` and `style tl_icon`
+- `_tl_bold_fontgroup` — `_tl_make_fontgroup(_tl_font_bold)`; used by `style tl_base_bold`
 
 **Functions:**
 

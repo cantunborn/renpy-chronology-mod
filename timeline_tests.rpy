@@ -74,6 +74,8 @@ init python:
             isinstance(persistent._tl_menu_scene_map, dict))
         r.check(s, "_tl_asset_thumb_cache is dict",
             isinstance(persistent._tl_asset_thumb_cache, dict))
+        r.check(s, "_tl_var_defaults is dict",
+            isinstance(persistent._tl_var_defaults, dict))
 
 
     def _tl_test_store_defaults(r):
@@ -85,7 +87,7 @@ init python:
         r.check(s, "_tl_branch_id is str",             isinstance(_tl_branch_id, str))
         r.check(s, "_tl_modal_node is None",           _tl_modal_node is None)
         r.check(s, "_tl_load_slot is str",             isinstance(_tl_load_slot, str))
-        r.check(s, "_tl_ast_map is dict",              isinstance(_tl_ast_map, dict))
+        r.check(s, "_tl_ast_ready is bool",            isinstance(_tl_ast_ready, bool))
         r.check(s, "_tl_ghost_nodes is list",          isinstance(_tl_ghost_nodes, list))
         r.check(s, "_tl_pending_save_index is None",   _tl_pending_save_index is None)
 

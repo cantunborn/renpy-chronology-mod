@@ -108,25 +108,39 @@ init -2 python:
         ## .code.bytecode. We eval the bytecode to get the actual default value.
         ## Only store-namespace defaults; skips vars starting with _.
         _defaults = {}
+        _default_nodes_found = 0
         for _dn in nodes:
             if type(_dn).__name__ != "Default":
                 continue
-            if getattr(_dn, "store", "store") != "store":
-                continue
+            _default_nodes_found += 1
             _vn = getattr(_dn, "varname", None)
+            _store_attr = getattr(_dn, "store", "store")
+            _code = getattr(_dn, "code", None)
+            _bc = getattr(_code, "bytecode", None)
+            if _store_attr != "store":
+                _tl_log("TL default skip {}: store={}".format(_vn, _store_attr))
+                continue
             if not _vn or _vn.startswith("_"):
                 continue
-            _bc = getattr(getattr(_dn, "code", None), "bytecode", None)
             if _bc is None:
+                _tl_log("TL default skip {}: bytecode=None code={}".format(_vn, _code))
                 continue
             try:
                 _dv = renpy.python.py_eval_bytecode(_bc)
-            except Exception:
-                continue
-            if isinstance(_dv, (bool, int, float, str)):
-                _defaults[_vn] = _dv
-        store._tl_var_defaults = _defaults
+                if isinstance(_dv, (bool, int, float, str)):
+                    _defaults[_vn] = _dv
+                else:
+                    _tl_log("TL default skip {}: non-scalar type={}".format(_vn, type(_dv).__name__))
+            except Exception as _e:
+                _tl_log("TL default skip {}: eval error {}".format(_vn, _e))
+        _tl_log("TL default walk: found {} Default nodes, captured {}".format(_default_nodes_found, len(_defaults)))
+        persistent._tl_var_defaults = _defaults
         _tl_log("TL route index: {} scalar default values captured".format(len(_defaults)))
+
+        ## Seed domain with declared default values so tooltip shows the starting
+        ## value even for vars never explicitly assigned in a Python block.
+        for _vn, _dv in _defaults.items():
+            _domain.setdefault(_vn, set()).add(str(_dv))
 
         ## ── If-node condition walk (uses nodes collected above) ───────────────
         ## Counts per If NODE (not per entry) so the runtime seen-key set can be
@@ -226,10 +240,18 @@ init -2 python:
         recently_changed = getattr(store, "_tl_recently_changed_vars", None) or set()
         highlighted = ghost_vars | recently_changed
 
-        var_defaults = getattr(store, "_tl_var_defaults", None) or {}
+        var_defaults = getattr(persistent, "_tl_var_defaults", None) or {}
+
+        ## Highlighted vars that are in defaults but not in route_var_names get a chip too.
+        ## (declared via `default`, only read in conditions, never $-assigned)
+        _var_name_set = set(var_names)
+        _extra = [v for v in sorted(highlighted) if v not in _var_name_set and v in var_defaults]
+        if TL_DEBUG_ROUTE and _extra:
+            _tl_log("TL chips: highlighted vars added from defaults only: {}".format(_extra))
+        _all_names = list(var_names) + _extra
 
         chips = []
-        for name in var_names:
+        for name in _all_names:
             val = getattr(store, name, None)
             if val is None:
                 continue
@@ -288,7 +310,7 @@ init -2 python:
         _f_new = float(new_val)
         _f_old = float(old_val)
         _delta = abs(_f_new - _f_old)
-        _arrow = "{font=DejaVuSans.ttf}↑{/font}" if _f_new > _f_old else "{font=DejaVuSans.ttf}↓{/font}"
+        _arrow = "↑" if _f_new > _f_old else "↓"
         if _delta != 1:
             _mag = int(_delta) if _delta == int(_delta) else _delta
             return _arrow + str(_mag) + " " + label
@@ -312,9 +334,9 @@ init -2 python:
                 try:
                     _parts.append(_tl_format_numeric_change(_label, _old, _new))
                 except (ValueError, TypeError):
-                    _parts.append(_label + " {font=DejaVuSans.ttf}→{/font} " + str(_new))
+                    _parts.append(_label + " → " + str(_new))
             else:
-                _parts.append(_label + " {font=DejaVuSans.ttf}→{/font} " + str(_new))
+                _parts.append(_label + " → " + str(_new))
         if _parts:
             _lines = [" · ".join(_parts[_i:_i+3]) for _i in range(0, len(_parts), 3)]
             _msg = "\n".join(_lines)
@@ -348,9 +370,9 @@ init -2 python:
                 try:
                     _parts.append(_tl_format_numeric_change(_label, _old or 0, _new))
                 except (ValueError, TypeError):
-                    _parts.append(_label + " {font=DejaVuSans.ttf}→{/font} " + str(_new))
+                    _parts.append(_label + " → " + str(_new))
             else:
-                _parts.append(_label + " {font=DejaVuSans.ttf}→{/font} " + str(_new))
+                _parts.append(_label + " → " + str(_new))
         if _parts:
             _lines = [" · ".join(_parts[_i:_i+3]) for _i in range(0, len(_parts), 3)]
             _msg = "\n".join(_lines)

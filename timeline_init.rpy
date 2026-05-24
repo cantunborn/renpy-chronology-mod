@@ -159,7 +159,6 @@ default _tl_pending_var_changes = {} ## {var_name: (old_val, new_val)} — flush
 default _tl_menu_var_snap = None    ## pre-menu route var snapshot for next-menu var-change attribution
 default _tl_recently_changed_vars = set()  ## vars changed since last menu; cleared at _tl_record_before
 default _tl_var_if_seen_keys = {}   ## {var_name: set(ast_keys)} — If nodes executed this session
-default _tl_var_defaults     = {}   ## {var_name: scalar} — declared default values from `default` stmts
 
 ## Replay state — stored in persistent so it survives a save/load cycle.
 init python:
@@ -208,6 +207,8 @@ init -2 python:
 
         ## Build persistent scene-before-menu map for backfill only.
         ## Runtime-captured menu images are authoritative and overwrite this map.
+        if persistent._tl_menu_scene_map is None:
+            persistent._tl_menu_scene_map = {}
         _new_scene_entries = [0]
         def _walk_menu_imgs(_cur, _last_img, _seen):
             while _cur is not None:

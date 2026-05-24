@@ -26,18 +26,18 @@ _build_chips     = ns["_tl_build_route_chips"]
 
 class TestFormatNumericChange:
     def test_increase_by_one_no_magnitude(self):
-        assert _format_change("Affection", 0, 1) == "{font=DejaVuSans.ttf}↑{/font} Affection"
+        assert _format_change("Affection", 0, 1) == "↑ Affection"
 
     def test_increase_by_three_shows_magnitude(self):
         result = _format_change("Affection", 0, 3)
-        assert "{font=DejaVuSans.ttf}↑{/font}3 Affection" == result
+        assert "↑3 Affection" == result
 
     def test_decrease_by_one_no_magnitude(self):
-        assert _format_change("Trust", 5, 4) == "{font=DejaVuSans.ttf}↓{/font} Trust"
+        assert _format_change("Trust", 5, 4) == "↓ Trust"
 
     def test_decrease_by_two_shows_magnitude(self):
         result = _format_change("Trust", 10, 8)
-        assert "{font=DejaVuSans.ttf}↓{/font}2 Trust" == result
+        assert "↓2 Trust" == result
 
     def test_integer_delta_no_decimal(self):
         ## delta of 3 should show as "3" not "3.0"
@@ -225,13 +225,13 @@ class TestBuildRouteChips:
     def setup_method(self):
         self._saved_names     = ns["persistent"]._tl_route_var_names
         self._saved_if_count  = ns["persistent"]._tl_var_if_count
-        self._saved_defaults  = ns["store"]._tl_var_defaults
+        self._saved_defaults  = ns["persistent"]._tl_var_defaults
         self._saved_seen_keys = getattr(ns["store"], "_tl_var_if_seen_keys", {})
         self._saved_ghost     = getattr(ns["store"], "_tl_ghost_nodes", [])
         self._saved_rcv       = getattr(ns["store"], "_tl_recently_changed_vars", set())
         ns["persistent"]._tl_route_var_names = []
         ns["persistent"]._tl_var_if_count    = {}
-        ns["store"]._tl_var_defaults    = {}
+        ns["persistent"]._tl_var_defaults    = {}
         ns["store"]._tl_var_if_seen_keys      = {}
         ns["store"]._tl_ghost_nodes           = []
         ns["store"]._tl_recently_changed_vars = set()
@@ -239,7 +239,7 @@ class TestBuildRouteChips:
     def teardown_method(self):
         ns["persistent"]._tl_route_var_names = self._saved_names
         ns["persistent"]._tl_var_if_count    = self._saved_if_count
-        ns["store"]._tl_var_defaults    = self._saved_defaults
+        ns["persistent"]._tl_var_defaults    = self._saved_defaults
         ns["store"]._tl_var_if_seen_keys      = self._saved_seen_keys
         ns["store"]._tl_ghost_nodes           = self._saved_ghost
         ns["store"]._tl_recently_changed_vars = self._saved_rcv
@@ -272,14 +272,14 @@ class TestBuildRouteChips:
 
     def test_var_at_default_hidden(self):
         ## Still at declared default → not yet touched by the story
-        ns["store"]._tl_var_defaults = {"affection": 0}
+        ns["persistent"]._tl_var_defaults = {"affection": 0}
         self._setup("affection", 0)
         chips = _build_chips()
         assert not any(c[0] == "affection" for c in chips)
 
     def test_var_changed_from_default_shown(self):
         ## Value differs from default → story has touched it
-        ns["store"]._tl_var_defaults = {"affection": 0}
+        ns["persistent"]._tl_var_defaults = {"affection": 0}
         self._setup("affection", 3)
         chips = _build_chips()
         assert any(c[0] == "affection" for c in chips)
@@ -292,7 +292,7 @@ class TestBuildRouteChips:
 
     def test_var_at_default_but_ghost_highlighted_shown(self):
         ## At default value but highlighted as ghost var → still shown
-        ns["store"]._tl_var_defaults = {"trust": "low"}
+        ns["persistent"]._tl_var_defaults = {"trust": "low"}
         self._setup("trust", "low")
         ns["store"]._tl_ghost_nodes = [{"affecting_vars": ["trust"]}]
         chips = _build_chips()
@@ -300,7 +300,7 @@ class TestBuildRouteChips:
 
     def test_var_at_default_but_recently_changed_shown(self):
         ## At default value but recently changed → still shown
-        ns["store"]._tl_var_defaults = {"affection": 0}
+        ns["persistent"]._tl_var_defaults = {"affection": 0}
         self._setup("affection", 0)
         ns["store"]._tl_recently_changed_vars = {"affection"}
         chips = _build_chips()

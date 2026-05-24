@@ -41,6 +41,7 @@ _persistent = types.SimpleNamespace(
     _tl_if_key_to_vars={},
     _tl_var_domain={},
     _tl_var_is_numeric=set(),
+    _tl_var_defaults={},
 )
 
 # store stub — wraps persistent for attribute delegation
@@ -282,7 +283,6 @@ _rpy_ns.setdefault("_tl_recently_changed_vars", set())
 _rpy_ns.setdefault("_tl_menu_var_snap", None)
 _rpy_ns.setdefault("_tl_var_if_seen_keys", {})
 _rpy_ns.setdefault("_tl_var_defaults", {})
-_store._tl_var_defaults = {}
 
 load_rpy("timeline_hooks.rpy", _rpy_ns)
 

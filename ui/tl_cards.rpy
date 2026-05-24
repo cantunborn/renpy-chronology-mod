@@ -167,7 +167,7 @@ screen tl_card_past(node, chosen_label, has_new, cw=300):
                 hover_background _tl_hover_gradient_wide
                 action SetVariable("_tl_modal_node", node)
 
-                text "All options {font=DejaVuSans.ttf}▾{/font}":
+                text "All options ▾":
                     style "tl_base"
                     size TL_SIZE_BODY
                     color TL["btn_text"]

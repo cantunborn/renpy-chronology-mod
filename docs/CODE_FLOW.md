@@ -252,12 +252,12 @@ The route tracker shows which story variables gate upcoming content and what the
 1. `_tl_build_ast_map()` calls `_tl_build_route_index(nodes)` with all label nodes from `renpy.game.script.namemap`.
 2. `_tl_build_route_index` does a full iterative block walk (work-queue from Label entry points) and three passes:
    - Python-node pass: collect var names, detect numeric classification, collect domain literals
-   - Default-node pass: eval bytecode of `default` AST nodes; store scalar defaults in `store._tl_var_defaults` (non-scalars skipped to avoid persistence errors)
+   - Default-node pass: eval bytecode of `default` AST nodes; store scalar defaults in `persistent._tl_var_defaults` (non-scalars skipped to avoid persistence errors); seeds each default value into `_domain` so the tooltip shows the starting value for vars never explicitly assigned
    - If-node pass: accumulate `if_count` per var, build seen descriptors per branch
-3. Results written to `persistent.*` keys — survives reloads. `store._tl_var_defaults` is transient and rebuilt each session.
+3. Results written to `persistent.*` keys — survives reloads, including `persistent._tl_var_defaults`.
 
 **Render time**:
-`_tl_build_route_chips()` reads persistent index and current store values. Hides vars with None values, non-scalar values, or values still at declared default (from `store._tl_var_defaults`) unless ghost-highlighted or recently-changed. Returns `list[(var_name, current_value)]` sorted: highlighted (ghost/recently-changed) first by `if_count` desc, then rest by `if_count` desc.
+`_tl_build_route_chips()` reads persistent index and current store values. Hides vars with None values, non-scalar values, or values still at declared default (from `persistent._tl_var_defaults`) unless ghost-highlighted or recently-changed. Highlighted vars present in `persistent._tl_var_defaults` but absent from `persistent._tl_route_var_names` (only declared via `default`, never `$`-assigned) are appended so they still appear as chips. Returns `list[(var_name, current_value)]` sorted: highlighted (ghost/recently-changed) first by `if_count` desc, then rest by `if_count` desc.
 
 `_tl_highlighted = ghost_vars ∪ recently_changed_vars` where `ghost_vars` comes from `_tl_ghost_nodes[*]["affecting_vars"]` and `recently_changed_vars` is `store._tl_recently_changed_vars`.
 
@@ -272,11 +272,10 @@ Domain tooltip is rendered at the top level as an absolute-positioned frame at `
 1. `_tl_snapshot_route_vars()` — record current store values
 2. `_tl_orig_python_execute(self)` — run original Python block
 3. `_tl_diff_route_vars(snap)` — find changes, accumulate into `store._tl_pending_var_changes`
-4. `_tl_flush_var_changes()` — emit one `renpy.show_screen("_tl_notify", message=...)`, clear dict
 
-The emit is immediate after each Python block. Back-to-back Python blocks produce a sequence of notifications each replacing the previous — the player always sees the latest complete picture.
+**Batched emit**: `_tl_flush_var_changes()` is called by `_tl_interact_callback` (fires once per RenPy interaction — dialogue, menu, pause). All Python blocks within a script segment accumulate into `_tl_pending_var_changes`; the flush emits one combined `renpy.show_screen("_tl_notify", message=...)` with all changes separated by ` · `. This ensures back-to-back assignments appear together rather than each replacing the previous.
 
-**Safety flush**: `_tl_record_before` calls `_tl_flush_var_changes()` at the top of each menu, catching any changes not already flushed.
+**Safety flush**: `_tl_record_before` also calls `_tl_flush_var_changes()` at the top of each menu, in case a segment leads directly into a menu with no interaction in between.
 
 **Menu-arm inits**: vars first assigned inside a menu arm (value was None at menu-present time) are handled by `_tl_flush_menu_snap()`, called by `_tl_record_before`. The `_tl_menu_var_snap` is taken at menu-present time and compared against store values after arm execution.
 

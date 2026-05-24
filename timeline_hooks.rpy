@@ -406,6 +406,10 @@ init python:
     def _tl_interact_callback():
         if not hasattr(store, "_tl_history"):
             return  ## store defaults not yet applied (pre-game-start interact)
+        ## Flush all var changes accumulated since the last interact as one batched
+        ## notification. Deferred here (not per Python block) so successive assignments
+        ## in the same script segment appear together rather than replacing each other.
+        _tl_flush_var_changes()
         ## Checkpoint saves: skip during skip mode to avoid racing with image loading.
         ## Pending index is left set so the save fires at the next non-skip interaction.
         if not config.skipping and store._tl_pending_save_index is not None:
