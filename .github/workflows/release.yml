@@ -21,30 +21,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6.0.2
 
-      - name: Build zip
+      - name: Build and release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${{ github.event.inputs.version }}"
-          MOD_DIR="staging/game/renpy-chronology-mod"
-          mkdir -p "$MOD_DIR"
+          GAME_INPUT="${{ github.event.inputs.game }}"
 
-          cp timeline_init.rpy \
-             timeline_hooks.rpy \
-             timeline_screen.rpy \
-             timeline_save_hooks.rpy \
-             timeline_tests.rpy \
-             "$MOD_DIR/"
-          cp -r fonts "$MOD_DIR/fonts"
-          cp -r backend "$MOD_DIR/backend"
-          cp -r ui "$MOD_DIR/ui"
-
-          GAME="${{ github.event.inputs.game }}"
-          GAME_FILE="${GAME:-sample}"
-          if [ ! -f "game-chapters/${GAME_FILE}.json" ]; then
-            echo "ERROR: game-chapters/${GAME_FILE}.json not found"; exit 1
+          # Determine list of targets: "all" expands to base + every non-sample game
+          if [ "$GAME_INPUT" = "all" ]; then
+            TARGETS="$(ls game-chapters/*.json | xargs -I{} basename {} .json | grep -v sample)"
+            TARGETS="$TARGETS sample"
+          else
+            TARGETS="${GAME_INPUT:-sample}"
           fi
-          cp "game-chapters/${GAME_FILE}.json" "$MOD_DIR/chapters.json"
 
-          python3 - README.md "$MOD_DIR/README.txt" <<'PYEOF'
+          convert_readme() {
+            python3 - README.md "$1" <<'PYEOF'
           import sys, re
           src, dst = sys.argv[1], sys.argv[2]
           text = open(src, encoding="utf-8").read()
@@ -79,30 +72,48 @@ jobs:
                   out.append(line)
           open(dst, "w", encoding="utf-8").write("\n".join(out).strip() + "\n")
           PYEOF
+          }
 
-          GAME="${{ github.event.inputs.game }}"
-          ZIP_NAME="chronology-mod-${VERSION}${GAME:+-$GAME}.zip"
-          cd staging
-          zip -r "../${ZIP_NAME}" game/ -x "*.DS_Store"
-          echo "ZIP=${ZIP_NAME}" >> "$GITHUB_ENV"
+          for GAME in $TARGETS; do
+            echo "→ Building target: $GAME"
+            MOD_DIR="staging/game/renpy-chronology-mod"
+            rm -rf staging
+            mkdir -p "$MOD_DIR"
 
-      - name: Create release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          GAME="${{ github.event.inputs.game }}"
+            cp timeline_init.rpy \
+               timeline_hooks.rpy \
+               timeline_screen.rpy \
+               timeline_save_hooks.rpy \
+               timeline_tests.rpy \
+               "$MOD_DIR/"
+            cp -r fonts "$MOD_DIR/fonts"
+            cp -r backend "$MOD_DIR/backend"
+            cp -r ui "$MOD_DIR/ui"
 
-          # Fixed tag and title — one permanent release per target, updated in place
-          if [ -n "$GAME" ]; then
-            TAG="stable-${GAME}"
-            TITLE="Chronology Mod - $(echo "$GAME" | sed 's/-/ /g' | sed 's/\b\(.\)/\u\1/g')"
-          else
-            TAG="stable"
-            TITLE="Chronology Mod - Stable Release"
-          fi
+            if [ ! -f "game-chapters/${GAME}.json" ]; then
+              echo "ERROR: game-chapters/${GAME}.json not found"; exit 1
+            fi
+            cp "game-chapters/${GAME}.json" "$MOD_DIR/chapters.json"
 
-          gh release delete "$TAG" --repo "${{ github.repository }}" --yes 2>/dev/null || true
-          gh release create "$TAG" "$ZIP" \
-            --repo "${{ github.repository }}" \
-            --title "$TITLE" \
-            --generate-notes
+            convert_readme "$MOD_DIR/README.txt"
+
+            if [ "$GAME" = "sample" ]; then
+              ZIP_NAME="chronology-mod-${VERSION}.zip"
+              TAG="stable"
+              TITLE="Chronology Mod - Stable Release"
+            else
+              ZIP_NAME="chronology-mod-${VERSION}-${GAME}.zip"
+              TAG="stable-${GAME}"
+              TITLE="Chronology Mod - $(echo "$GAME" | sed 's/-/ /g' | sed 's/\b\(.\)/\u\1/g')"
+            fi
+
+            (cd staging && zip -r "../${ZIP_NAME}" game/ -x "*.DS_Store")
+            echo "→ Created ${ZIP_NAME}"
+
+            gh release delete "$TAG" --repo "${{ github.repository }}" --yes 2>/dev/null || true
+            gh release create "$TAG" "$ZIP_NAME" \
+              --repo "${{ github.repository }}" \
+              --title "$TITLE" \
+              --generate-notes
+            echo "→ Released ${TAG}"
+          done
