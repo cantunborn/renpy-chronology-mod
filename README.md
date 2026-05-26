@@ -81,7 +81,9 @@ When the game evaluates a story branch between your choices, the route screen sh
 
 ### Branch Notifications
 
-When you pass through a branching point, a brief toast appears: `⎇` if there are paths you haven't taken, `⎇ New path` if the branch you just took is itself new. When a story variable changes mid-scene, a separate toast shows what changed — `↑ Affection`, `Route → romance`, etc.
+When you pass through a branching point, a brief toast appears: `⎇` if there are paths you haven't taken, `⎇ New path` if the branch you just took is itself new.
+
+When a story variable changes mid-scene, a separate toast shows what changed — `↑ Affection`, `Route → romance`, etc. These are off by default. To enable them, open the route tracker (R) and toggle **Var change notifs** in the header.
 
 ### Save Compatibility
 
