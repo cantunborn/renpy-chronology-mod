@@ -177,7 +177,7 @@ init python:
         (0x00B7, 0x00B7),   ## · middle dot
         (0x2190, 0x21FF),   ## ↑ ↓ → ↺ arrows
         (0x2387, 0x2387),   ## ⎇ branch
-        (0x2715, 0x2715),   ## ✕ close
+        (0x2713, 0x2717),   ## ✓ check, ✕ close, ✗ cross
         (0x25BE, 0x25BE),   ## ▾ down triangle
         (0x25CF, 0x25CF),   ## ● filled circle
     ]

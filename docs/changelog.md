@@ -7,6 +7,22 @@ that is present in the codebase but not yet committed.
 
 ## Unreleased
 
+### Feature: Var change notifs toggle
+
+- **`timeline_screen.rpy`** — added "Var change notifs ✓/✗" button to the route tab header (hidden on cards tab). Uses `ToggleField(persistent, "_tl_var_notifs_enabled")`.
+- **`timeline_init.rpy`** — added `persistent._tl_var_notifs_enabled` initialised to `False` (opt-in). Uses `hasattr` guard for save compatibility.
+- **`timeline_hooks.rpy`** — both flush sites (`_tl_interact_callback` and `_tl_record_before`) now discard `_tl_pending_var_changes` and `_tl_menu_var_snap` when disabled instead of flushing. Ensures enabling mid-session starts clean with no backlog. `_tl_recently_changed_vars` (chip tinting) is unaffected — populated by the diff which runs unconditionally.
+- **`ui/tl_theme.rpy`** — widened glyph range from U+2715 to U+2713–U+2717 to cover ✓ and ✗.
+
+### Fix: Route var collection — union `default`-declared vars into `_tl_route_var_names`
+
+- **`backend/tl_route_logic.rpy`** — after the Default-node walk, `_route_vars` is updated with `_defaults.keys()` before writing `persistent._tl_route_var_names`. Previously only `$`-assigned vars were collected; vars declared via `default varname = value` and only read in If conditions (never assigned) were absent from `_tl_route_var_names` and invisible to the chip bar entirely. The existing `_extra` path in `_tl_build_route_chips` (which appended highlighted default-only vars) is now redundant for this case but kept as a safety net for vars not captured by either walk.
+
+### Fix: Game script filter — exclude `renpy/` internals instead of requiring `game/` prefix
+
+- **`backend/tl_route_logic.rpy`**, **`backend/tl_ghost_logic.rpy`**, **`backend/tl_coverage.rpy`** — all `_game_file` / `_tl_should_track_if_node` / `_tl_python_execute_patched` filename filters changed from `startswith("game/")` to `not startswith("renpy/")`. RenPy stores AST filenames relative to the `game/` directory, so game scripts never carry a `game/` prefix — games that archive scripts under a subdirectory (e.g. `scripts.rpa` → `scripts/base/script.rpyc`) were being silently excluded, producing zero route vars, zero ghost cards, and zero coverage branches.
+- **`tests/test_ghost_logic.py`** — added `test_game_script_no_game_prefix_diff_called` to cover `scripts/base/script.rpyc` style paths; updated `test_non_game_file_bypasses_diff` comment to reflect the new filter logic.
+
 ### Refactor: Font system — centralize into shared FontGroups in tl_theme.rpy
 
 - **`ui/tl_theme.rpy`** — replaced the 35-line font resolution init block (which had a dead InterVariable/DejaVuSans fallback branch) with a clean 5-line resolution, then builds `_tl_fontgroup` and `_tl_bold_fontgroup` via `_tl_make_fontgroup(base)`. The helper adds DejaVuSans overrides for six glyph ranges (middle dot U+00B7, arrows U+2190–U+21FF, branch ⎇ U+2387, close ✕ U+2715, down-triangle ▾ U+25BE, filled circle ● U+25CF) before falling back to the game/Inter base font. `style tl_base`, `style tl_base_bold`, and `style tl_icon` all now use the shared fontgroups.

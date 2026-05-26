@@ -10,9 +10,14 @@ init -1 python:
         global _tl_branch_id, _tl_node_count, _tl_history, _tl_context
 
         ## Flush immediate var changes (non-init) and init-in-arm changes (from menu snap).
+        ## When notifs disabled: discard pending dict so enabling mid-session starts clean.
         try:
-            _tl_flush_var_changes()
-            _tl_flush_menu_snap()
+            if getattr(persistent, "_tl_var_notifs_enabled", True):
+                _tl_flush_var_changes()
+                _tl_flush_menu_snap()
+            else:
+                store._tl_pending_var_changes = {}
+                store._tl_menu_var_snap = None
         except Exception:
             pass
 
@@ -407,9 +412,11 @@ init python:
         if not hasattr(store, "_tl_history"):
             return  ## store defaults not yet applied (pre-game-start interact)
         ## Flush all var changes accumulated since the last interact as one batched
-        ## notification. Deferred here (not per Python block) so successive assignments
-        ## in the same script segment appear together rather than replacing each other.
-        _tl_flush_var_changes()
+        ## notification. When disabled: discard instead so enabling mid-session starts clean.
+        if getattr(persistent, "_tl_var_notifs_enabled", True):
+            _tl_flush_var_changes()
+        else:
+            store._tl_pending_var_changes = {}
         ## Checkpoint saves: skip during skip mode to avoid racing with image loading.
         ## Pending index is left set so the save fires at the next non-skip interaction.
         if not config.skipping and store._tl_pending_save_index is not None:

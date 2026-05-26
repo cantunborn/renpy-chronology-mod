@@ -267,7 +267,7 @@ Domain tooltip is rendered at the top level as an absolute-positioned frame at `
 
 ## Var Change Notification Flow
 
-**Detection**: `_tl_python_execute_patched` wraps `renpy.ast.Python.execute`. Only active for `game/` files that are not mod files, and only when not replaying or skipping.
+**Detection**: `_tl_python_execute_patched` wraps `renpy.ast.Python.execute`. Only active for game script files (not `renpy/` internals, not mod files), and only when not replaying or skipping. Note: RenPy stores filenames relative to the `game/` directory, so game scripts never have a `game/` prefix — the filter excludes `renpy/` rather than requiring `game/`.
 
 1. `_tl_snapshot_route_vars()` — record current store values
 2. `_tl_orig_python_execute(self)` — run original Python block
@@ -276,6 +276,8 @@ Domain tooltip is rendered at the top level as an absolute-positioned frame at `
 **Batched emit**: `_tl_flush_var_changes()` is called by `_tl_interact_callback` (fires once per RenPy interaction — dialogue, menu, pause). All Python blocks within a script segment accumulate into `_tl_pending_var_changes`; the flush emits one combined `renpy.show_screen("_tl_notify", message=...)` with all changes separated by ` · `. This ensures back-to-back assignments appear together rather than each replacing the previous.
 
 **Safety flush**: `_tl_record_before` also calls `_tl_flush_var_changes()` at the top of each menu, in case a segment leads directly into a menu with no interaction in between.
+
+**User toggle**: `persistent._tl_var_notifs_enabled` (default `False`). When False, both flush sites discard `_tl_pending_var_changes` instead of emitting, so enabling mid-session always starts clean. `_tl_recently_changed_vars` (chip tinting) is populated by the diff and is unaffected by this toggle.
 
 **Menu-arm inits**: vars first assigned inside a menu arm (value was None at menu-present time) are handled by `_tl_flush_menu_snap()`, called by `_tl_record_before`. The `_tl_menu_var_snap` is taken at menu-present time and compared against store values after arm execution.
 

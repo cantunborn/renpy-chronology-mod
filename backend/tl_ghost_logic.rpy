@@ -564,7 +564,9 @@ init python:
 
     def _tl_should_track_if_node(if_node):
         _filename = getattr(if_node, "filename", None) or ""
-        if not _filename.startswith("game/"):
+        if not _filename or _filename.startswith("renpy/"):
+            return False
+        if "renpy-chronology-mod" in _filename:
             return False
         _base = _filename.rsplit("/", 1)[-1]
         if _base.startswith("timeline_") and _base.endswith(".rpy"):
@@ -670,7 +672,8 @@ init python:
 
     def _tl_python_execute_patched(self):
         _filename = getattr(self, "filename", None) or ""
-        if not (_filename.startswith("game/") and
+        if not (_filename and
+                not _filename.startswith("renpy/") and
                 "renpy-chronology-mod" not in _filename and
                 getattr(store, "_tl_branch_id", "") and
                 not getattr(persistent, "_tl_replaying", False) and

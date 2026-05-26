@@ -16,8 +16,12 @@ init -2 python:
         """
         import ast as _pyast
 
+        ## RenPy stores filenames relative to the game/ dir, so game scripts
+        ## never start with "game/". Only exclude RenPy internals (renpy/) and
+        ## mod files.
         _game_file = lambda _f: (
-            (_f or "").startswith("game/")
+            bool(_f)
+            and not (_f or "").startswith("renpy/")
             and "renpy-chronology-mod" not in (_f or "")
         )
 
@@ -102,6 +106,7 @@ init -2 python:
 
         persistent._tl_route_var_names = list(_route_vars)
         _tl_log("TL route index: {} assigned vars".format(len(_route_vars)))
+        ## Note: default-declared vars are merged in after the Default-node walk.
 
         ## ── Default node walk — capture declared default values ───────────────
         ## `default varname = expr` creates a Default AST node with .varname and
@@ -136,6 +141,12 @@ init -2 python:
         _tl_log("TL default walk: found {} Default nodes, captured {}".format(_default_nodes_found, len(_defaults)))
         persistent._tl_var_defaults = _defaults
         _tl_log("TL route index: {} scalar default values captured".format(len(_defaults)))
+
+        ## Union default-declared vars into route_var_names so vars that are only
+        ## declared via `default` (never $-assigned) are still tracked as route vars.
+        _route_vars.update(_defaults.keys())
+        persistent._tl_route_var_names = list(_route_vars)
+        _tl_log("TL route index: {} total route vars (assigned + defaults)".format(len(_route_vars)))
 
         ## Seed domain with declared default values so tooltip shows the starting
         ## value even for vars never explicitly assigned in a Python block.

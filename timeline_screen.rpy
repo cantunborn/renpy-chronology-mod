@@ -152,6 +152,27 @@ screen timeline():
 
                 null xsize 16
 
+                if tl_view == "route":
+                    python:
+                        _tl_notifs_on    = getattr(persistent, "_tl_var_notifs_enabled", True)
+                        _tl_notifs_label = "Var change notifs ✓" if _tl_notifs_on else "Var change notifs ✗"
+                        _tl_notifs_color = TL["header_text"] if _tl_notifs_on else TL["header_sub"]
+                    button:
+                        background Solid(TL["btn_bg"])
+                        hover_background Solid(TL["btn_hover_bg"])
+                        padding (10, 6, 10, 6)
+                        yalign 0.5
+                        action ToggleField(persistent, "_tl_var_notifs_enabled")
+
+                        text _tl_notifs_label:
+                            style "tl_base"
+                            size TL_SIZE_SUBTITLE
+                            color _tl_notifs_color
+                            hover_color TL["header_text"]
+                            yalign 0.5
+
+                    null xsize 16
+
                 python:
                     _tl_perf_t0 = _tl_perf_mark()
                     _tl_playthrough_new = sum(

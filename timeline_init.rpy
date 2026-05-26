@@ -172,6 +172,9 @@ init python:
         persistent._tl_img_movie_cache = {}
     if not hasattr(persistent, "_tl_pending_shadow_path"):
         persistent._tl_pending_shadow_path = None
+    
+    if not hasattr(persistent, "_tl_var_notifs_enabled") or persistent._tl_var_notifs_enabled is None:
+        persistent._tl_var_notifs_enabled = False
 
     if persistent._tl_scene_map_version is None or persistent._tl_scene_map_version < 3:
         persistent._tl_menu_scene_map = {}

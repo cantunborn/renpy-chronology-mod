@@ -485,8 +485,15 @@ class TestPythonExecutePatched:
         return node
 
     def test_game_script_diff_called(self):
-        ## game/ file with branch_id → _tl_diff_route_vars IS called
+        ## game script (no renpy/ prefix) with branch_id → diff IS called
         node = self._make_py("game/scripts/intro.rpy")
+        _python_patched(node)
+        assert len(self._diff_calls) == 1
+
+    def test_game_script_no_game_prefix_diff_called(self):
+        ## RenPy stores paths relative to game/ dir — scripts/ prefix with no game/ prefix
+        ## is a valid game script (e.g. games that archive scripts in scripts.rpa)
+        node = self._make_py("scripts/base/script.rpyc")
         _python_patched(node)
         assert len(self._diff_calls) == 1
 
@@ -497,7 +504,7 @@ class TestPythonExecutePatched:
         assert self._diff_calls == []
 
     def test_non_game_file_bypasses_diff(self):
-        ## Not game/ → short-circuit, no diff
+        ## renpy/ prefix → RenPy internal, short-circuit, no diff
         node = self._make_py("renpy/common/_layout.rpym")
         _python_patched(node)
         assert self._diff_calls == []

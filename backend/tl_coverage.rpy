@@ -16,7 +16,8 @@ init -2 python:
         """
 
         _game_file = lambda _f: (
-            (_f or "").startswith("game/")
+            bool(_f)
+            and not (_f or "").startswith("renpy/")
             and "renpy-chronology-mod" not in (_f or "")
         )
 

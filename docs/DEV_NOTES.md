@@ -128,10 +128,10 @@ Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` and `renpy.ast.Pytho
 | `_tl_partition_if_run` | `(run) → list` | Partitions a sequential If run into mutually-exclusive cluster groups. |
 | `_tl_emit_ghost_cluster` | `(group, cluster_with_prev) → None` | Emits one ghost card object from a clustered group of If payloads into `_tl_ghost_nodes`. |
 | `_tl_on_if_execute` | `(if_node, taken_index, pre_taken_seen=None) → None` | Callback after If.execute; orchestrates ghost synthesis, visited-node marking, and branch notification via `_tl_notify_branch`. |
-| `_tl_should_track_if_node` | `(if_node) → bool` | Returns True if the If node is from a game script (not timeline internals). |
+| `_tl_should_track_if_node` | `(if_node) → bool` | Returns True if the If node is from a game script: filename is non-empty, does not start with `renpy/` (RenPy internals), does not contain `renpy-chronology-mod`, and is not a `timeline_*.rpy` mod file. |
 | `_tl_if_execute_patched` | `(self) → None` | Replacement for `renpy.ast.If.execute`; evaluates taken branch descriptor **before** executing (pre-execute snapshot) and calls `_tl_on_if_execute`. |
 | `_tl_notify_branch` | `(run, taken_index, pre_taken_seen=None) → None` | Three-tier branch notification: suppress (all branches seen), icon-only `⎇` (taken seen, ≥1 alternative unseen), or "New path" (taken branch itself was never taken before). Uses index-based comparison so equal tuples from different branches are correctly distinguished. |
-| `_tl_python_execute_patched` | `(self) → None` | Replacement for `renpy.ast.Python.execute`; filename-filtered to game scripts only (`game/` prefix, not mod files); guards on `persistent._tl_replaying` and `config.skipping`; calls snapshot → original → diff → flush for route var change detection. |
+| `_tl_python_execute_patched` | `(self) → None` | Replacement for `renpy.ast.Python.execute`; filename-filtered to game scripts only (not `renpy/`, not mod files); guards on `persistent._tl_replaying` and `config.skipping`; calls snapshot → original → diff for route var change detection. Flush happens in `_tl_interact_callback`, not here. |
 
 ---
 
@@ -152,6 +152,7 @@ Route tracker backend: AST index build, chip filtering/ordering, snapshot/diff/f
 - `store._tl_menu_var_snap` — `{var: value}`; snapshot taken at menu-present time for init-assign detection
 - `store._tl_var_if_seen_keys` — `{var_name: set(ast_key)}`; tracks which If-node AST keys have been executed this session per var; used by `_tl_var_consumed` to determine whether all branches referencing a var have been hit
 - `persistent._tl_var_defaults` — `{var_name: scalar}`; declared default values from `default` AST nodes (scalar only: bool/int/float/str); written at AST-walk time; survives save/load; used by `_tl_build_route_chips` to hide vars still at their declared default
+- `persistent._tl_var_notifs_enabled` — `bool`; user toggle for var change notifications; defaults to `False`; when False, `_tl_pending_var_changes` is discarded each interact rather than emitted, so enabling mid-session starts clean
 
 **Functions:**
 
