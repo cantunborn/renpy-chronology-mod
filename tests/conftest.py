@@ -60,6 +60,8 @@ _renpy.config = types.SimpleNamespace(
     after_load_callbacks=[],
     interact_callbacks=[],
     label_callbacks=[],
+    statement_callbacks=[],
+    quit_callbacks=[],
 )
 class _TranslatorStub:
     """Minimal translator stub for seen-check tests."""
@@ -172,6 +174,10 @@ class Python(_TLNode):
             pass
         self.code = _Code()
         self.code.source = source
+        try:
+            self.code.bytecode = compile(source, "<test>", "exec")
+        except Exception:
+            self.code.bytecode = None
     def execute(self):
         pass
 
@@ -228,9 +234,10 @@ class If(_TLNode):
         pass
 
 class Label(_TLNode):
-    def __init__(self, block):
+    def __init__(self, block, name="test_label"):
         super().__init__("Label")
         self.block = block
+        self.name = name
         self.filename = "test.rpy"
         self.linenumber = 1
 
@@ -260,6 +267,7 @@ sys.modules.setdefault("renpy.ast", _renpy_ast_mod)
 
 _rpy_ns = {}
 for _f in [
+    "backend/tl_ast_utils.rpy",
     "backend/tl_chapter.rpy",
     "backend/tl_menu_location.rpy",
     "backend/tl_menu_options.rpy",

@@ -7,6 +7,174 @@ that is present in the codebase but not yet committed.
 
 ## Unreleased
 
+### Fix: _tl_cancel_replay was still writing to persistent._tl_thumb_cache
+
+- **`backend/tl_saveload.rpy`** (`_tl_cancel_replay`) — thumbnail snapshot before recovery load now writes to `renpy.game._tl_thumb_cache` instead of `persistent._tl_thumb_cache`. This was the last remaining call site missed when migrating the cache. Also removed the stray `renpy.save_persistent()` call that followed (no longer needed — cache is not in persistent).
+
+### Perf: move thumbnail caches out of persistent — fixes save_persistent() latency
+
+- **`timeline_init.rpy`** — thumbnail caches (`_tl_thumb_cache`, `_tl_asset_thumb_cache`) moved from `persistent` to `renpy.game` module attributes. `renpy.game` is a Python module object whose attrs survive `renpy.load()` but are never serialised by `save_persistent()`. Caches are loaded from `_tl_thumbs.pkl` in the save dir at game start and written back at quit via `config.quit_callbacks`. One-time migration drains any existing persistent blobs into the new location.
+- **`timeline_init.rpy`** — `_tl_thumbs.pkl` is written and read with gzip compression. Legacy uncompressed files are detected via `gzip.BadGzipFile` fallback and rewritten compressed at next quit. Reduces on-disk size from ~78 MB to ~44 MB.
+- **`backend/tl_assets.rpy`** — `_tl_get_asset_thumb_bytes`, `_tl_node_thumb`, `_tl_clear_thumb_cache` updated to read/write `renpy.game._tl_asset_thumb_cache` / `renpy.game._tl_thumb_cache`.
+- **`timeline_hooks.rpy`** — `_tl_record_before` updated to use `renpy.game._tl_thumb_cache`.
+- **`tests/conftest.py`** — added `quit_callbacks=[]` to config stub.
+- **Verified result**: persistent < 1 MB; `save_persistent()` ~109–127 ms (was ~1444 ms); full jump round-trip ~300 ms (was ~3 s); load timing ~53 ms.
+
+### Perf: reduce jump and load latency
+
+- **`backend/tl_saveload.rpy`** (`_tl_save_no_screenshot`) — restored `mutate_flag=False` on RenPy 8+. This was present in the original `_tl_write_pre_save` but accidentally dropped when extracting the helper. Without it, RenPy calls `location.scan()` (`os.listdir()` on the full save dir) after every `renpy.save()`. Applies to all mod-internal saves: pre-saves, `_ch_recovery`, `_ch_start`, chapter-end saves.
+- **`timeline_hooks.rpy`** (`_tl_on_load`) — skip `_tl_migrate_img_names()` on replay loads. Pre-saves are written this session after AST is ready, so all history nodes already have `img_name` set. The O(history) migration walk was a no-op on every jump load.
+
+### Fix: strip screenshots from all mod-internal saves (RenPy 7+8)
+
+- **`backend/tl_saveload.rpy`** — new `_tl_save_no_screenshot(slot)` helper: uses `include_screenshot=False` on RenPy 8+; shadows `interface.get_screenshot` with a 1×1 black PNG on RenPy 7. Applied to `_ch_recovery` (×2), pre-saves via `_tl_write_pre_save`, and is the canonical save path for all mod-internal slots.
+- **`timeline_hooks.rpy`** — `_ch_start` (×3) and `_chap_slot` chapter-end saves now use `_tl_save_no_screenshot`. Mod-internal saves never appear in the player's save UI so screenshots are pure waste (~153 KB per save).
+- **`backend/tl_saveload.rpy`** (`_tl_write_pre_save`) — inline RenPy 7/8 version branch replaced with `_tl_save_no_screenshot` call; no behavior change.
+
+### Fix: pre-save hash consistency — scan uses `_tl_pre_save_slot` directly
+
+- **`backend/tl_saveload.rpy`** (`_tl_find_nearest_pre_save`) — replaced inline hash computation with a call to `_tl_pre_save_slot(_idx, context, _ast_key)`. Eliminates duplicate hash formula; write and scan are now guaranteed to agree even if the formula changes.
+- **`tests/test_saveload.py`** — added 9 tests covering `ast_key` in `TestPreSaveSlot`, `TestFindPreSave`, and `TestFindNearestPreSave` (including history-based ast_key lookup path).
+
+### Fix: clear ghost nodes on screen-navigate statements for sandbox location navigation
+
+- **`backend/tl_ghost_logic.rpy`** — `_tl_on_call_screen` renamed to `_tl_on_screen_navigate` and expanded to handle both `"call screen"` and `"show screen"` statement types. Covers sandbox games that navigate via `call screen locN_*` (IC style) and those that navigate via `show screen locN` (PhotoHunt style). `renpy.show_screen()` called from Python does not fire `config.statement_callbacks`, so mod-internal notify calls are unaffected.
+- **`tests/conftest.py`** — added `statement_callbacks=[]` to the config stub.
+
+### Cleanup: remove TL_PROFILE_TIMELINE profiling system and _tl_save_space_report
+
+- **`timeline_init.rpy`** — removed `TL_PROFILE_TIMELINE` flag, `_tl_timeline_perf_stats` dict, and `_tl_perf_mark` / `_tl_perf_add` / `_tl_perf_reset` / `_tl_perf_dump` helpers. The system was added to diagnose timeline screen open latency; the root cause (structural scene-dot path) was fixed by local dot mode. Dead code since then.
+- **`timeline_init.rpy`** — removed `_tl_save_space_report()` and its call in `_tl_build_ast_map`. Was a console diagnostic for save file size breakdown; no longer needed.
+- **`timeline_screen.rpy`** — removed `_tl_perf_reset`, `_tl_perf_mark`, `_tl_perf_add`, `_tl_perf_dump` call sites (3 instrumented blocks + final dump).
+- **`backend/tl_assets.rpy`** — removed `_tl_perf_mark` / `_tl_perf_add` call sites from `_tl_img_thumb_displayable`; simplified function body (removed try/finally wrapper).
+
+### Refactor: Python.execute dispatcher
+
+- **`backend/tl_ast_utils.rpy`** — single `Python.execute` monkeypatch. Defines `_tl_python_execute_hooks` (list of `(pre_fn|None, post_fn|None)` tuples) and `_tl_python_execute_dispatch` which calls all pre-hooks, executes the original, then calls all post-hooks. Error handling lives in the dispatcher so individual hooks don't need try/except.
+- **`backend/tl_route_logic.rpy`** — direct `Python.execute` monkeypatch restored (dispatcher removed — only one consumer). Logic split into `_tl_py_pre_var_snap` (guards + co_names snapshot) and `_tl_py_post_var_diff` (diffs snap, updates pending var changes); `_tl_python_execute_patched` wraps both and replaces `Python.execute` directly.
+- **`backend/tl_ast_utils.rpy`** — removed `_tl_python_execute_hooks` dispatcher (no longer needed).
+- **`tests/test_route_logic.py`** — `_run_var_hooks` helper updated: `_tl_py_post_var_diff` signature now takes only `snap` (no `node` arg).
+
+### Revert: NoRollback containers for ghost node accumulators — breaks rollback semantics
+
+- **`timeline_init.rpy`** — removed `_TlNoRollbackList`/`_TlNoRollbackSet` classes; `default _tl_ghost_nodes` and `default _tl_skip_ghost_ifs` reverted to `[]` / `set()`. NoRollback containers prevent ghost nodes from rolling back with game state — causing duplicate cards in IC (Ctrl+Z past a menu leaves stale ghost nodes) and wrong-location display in PhotoHunt (ghost nodes from loc N appear at loc N+1 because location navigation rolls back but ghost nodes don't). Same failure mode as the previously reverted `_TlNoSaveList`/`_TlNoSaveSet` attempt.
+- **`timeline_hooks.rpy`** (`_tl_record_before`) — back to `store._tl_ghost_nodes = []` / `store._tl_skip_ghost_ifs = set()`.
+- **`timeline_hooks.rpy`** (`_tl_on_load`) — removed the NoRollback reset block (no longer needed).
+- **`timeline_tests.rpy`** — removed `_tl_test_no_rollback_containers` (tested the now-reverted approach).
+
+### Fix: NoRollback containers for ghost node accumulators; foreground pre-saves; ast_key in pre-save hash
+
+- **`timeline_init.rpy`** — added `_TlNoRollbackList(NoRollback, list)` and `_TlNoRollbackSet(NoRollback, set)` wrapper classes. Changed `default _tl_ghost_nodes` to `_TlNoRollbackList()` and `default _tl_skip_ghost_ifs` to `_TlNoRollbackSet()`. In sandbox games (PhotoHunt-style) with many sequential If nodes, the previous `RevertableList.append()` calls registered mutation deltas in the rollback log for every ghost node — in Python 2, pickling hundreds of chained `mutated` delta entries hits cPickle's ~1000-frame recursion limit and crashes saves. `NoRollback` instances have their `reached()` return immediately, preventing any delta registration.
+- **`timeline_hooks.rpy`** (`_tl_record_before`) — ghost node reset now assigns `_TlNoRollbackList()` and `_TlNoRollbackSet()` directly (replaces prior full-list assignment).
+- **`timeline_hooks.rpy`** (`_tl_on_load`) — added reset of `_tl_ghost_nodes` and `_tl_skip_ghost_ifs` to their NoRollback types after every load. Required because `default` declarations do not override values restored from saves predating this change — old saves store `RevertableList` for ghost nodes and would reintroduce the mutation-tracking bug.
+- **`backend/tl_saveload.rpy`** — reverted pre-save writes from background thread to foreground (synchronous). Background approach introduced skip-mode interaction issues; synchronous writes in `_tl_record_before` (always at a menu, safe pause point) are simpler and have no observable latency at menu transitions. Removed: `_TL_PRESAVE_LOCK_KEY`, `_tl_presave_lock()`, thread spawn, lock wait in `_tl_begin_jump`.
+- **`backend/tl_saveload.rpy`** (`_tl_pre_save_slot`) — added `ast_key` parameter to slot hash. Hash input changed from `repr(tuple(context[:N]))` to `repr((tuple(context[:N]), ast_key))`. In sandbox games, different menus can share the same `node_index` but have distinct `(filename, linenumber)` AST identities — without `ast_key` in the hash, `_tl_find_pre_save` could return the wrong save when two menus share a node_index. `_tl_write_pre_save` and `_tl_find_pre_save` both accept `ast_key=None` for backwards compatibility.
+- **`backend/tl_saveload.rpy`** (`_tl_write_pre_save`) — RenPy 7 screenshot suppression fixed: `renpy.save()` on RenPy 7 does not accept `include_screenshot=False` (raises `TypeError`). Fix: shadow `renpy.game.interface.get_screenshot` with an instance attribute returning `_TL_EMPTY_PNG` (68-byte 1×1 black PNG) for the duration of the save; restored in `finally` via `del`. RenPy 8 path unchanged (`include_screenshot=False, mutate_flag=False`).
+- **`timeline_tests.rpy`** (`_tl_test_no_rollback_containers`) — new in-game test: verifies `_TlNoRollbackList` and `_TlNoRollbackSet` work correctly (len, index, iter, contains, bool) and that `store._tl_ghost_nodes` / `store._tl_skip_ghost_ifs` are the correct NoRollback types after load. Uses `isinstance(obj, renpy.python.NoRollback)` rather than `id`-in-`mutated` (the latter is unreliable due to Python memory address reuse).
+- **`timeline_tests.rpy`** (`_tl_test_pre_save_written`) — fixed: now extracts `ast_key` from each history node via `_tl_derive_node_menu_site_key` before calling `_tl_find_pre_save`. Previous version passed `ast_key=None`, computing a different hash than what the actual pre-save files are named with — caused 0/N found even when saves existed on disk.
+
+### Feat: Pre-save cleanup — `_tl_thin_pre_saves` experimental console function
+
+- **`backend/tl_ast_utils.rpy`** — `_tl_walk_ast_blocks` extended with `current_label` as a 3rd visitor argument. Work queue entries changed from `(block, state)` to `(block, state, label_name)`; label name is seeded from each `Label` node's `.name` and propagates unchanged into all `If`/`Menu` sub-blocks. All existing callers updated to accept `_label=None` as the 3rd visitor parameter.
+- **`backend/tl_coverage.rpy`**, **`backend/tl_route_logic.rpy`**, **`backend/tl_assets.rpy`** — visitor signatures updated to `(node, state, _label=None)`.
+- **`backend/tl_saveload.rpy`** — added `_tl_find_nearest_pre_save(target_index, context, save_dir)`: range scan of `_pre_*` files, hash-verified against `context[:idx]`, returns highest-index matching pre-save ≤ target. `_tl_begin_jump` updated to 3-tier fallback: (1) exact pre-save → zero skip, (2) nearest earlier pre-save → skip from there, (3) `_ch_*` scan. Added `_tl_read_pre_save_roots(slot_name, save_dir)`: opens save ZIP, unpickles `log` entry, returns roots dict without touching game state. Added `_tl_path_has_danger(start_block, roots, label_map, danger_labels)`: forward AST walk evaluating `If` conditions against save roots, returns `True` if a blocking interaction (`renpy.pause`, `renpy.input`, `renpy.call_screen`, `ui.interact`, `imagemap`, `call screen`) is reachable before any `Menu` node. Added `_tl_thin_pre_saves(keep_every=5, dry_run=True, save_dir)`: console-only cleanup function — reads each pre-save's own `store._tl_history`, uses `history[-1]` + `_tl_live_menu_lookup()` to identify the preceding menu, matches chosen option by label to find the AST block, marks the save essential if `_tl_path_has_danger` returns True; non-essential saves deleted (or logged in dry-run). False negatives (essential save deleted) are not OK; false positives (non-essential kept) are OK — conservative fallback on any lookup failure. Also added `_TL_BLOCK_PY` and `_TL_BLOCK_US` pattern lists for blocking-interaction detection.
+- **`backend/tl_saveload.rpy`** (`_tl_write_pre_save`) — RenPy 7 compatibility: `renpy.save()` in RenPy 7.x does not accept `include_screenshot=False`. On `TypeError`, temporarily replaces `renpy.game.interface.screenshot` with `_TL_EMPTY_PNG` (a 68-byte 1×1 black PNG) so `get_screenshot()` returns minimal bytes instead of a full thumbnail; restored in `finally`. Screenshot suppression confirmed (67-byte screenshot in ZIP). Log truncation to 1 entry works on both versions; on RenPy 7, save size is dominated by `roots` (store snapshot of all ever-changed vars) rather than rollback entries — irreducible without excluding vars.
+- **`timeline_init.rpy`** — added `_tl_save_space_report(save_dir=None)`: logs count, average KB, and total MB per save type (`_pre_*`, `_ch_*`, other) to `debug.txt`; called automatically at end of `_tl_build_ast_map` on every load and game start.
+- **`tests/test_saveload.py`** — added `TestFindNearestPreSave` (9 tests) and `TestPathHasDanger` (14 tests).
+- **`tests/test_ast_walk.py`** — added `TestWalkAstBlocksCurrentLabel` (4 tests); all existing visitor lambdas updated to accept `_l=None`.
+- **`tests/test_route_logic.py`** — visitor lambdas updated to accept `_l=None`.
+- **`timeline_tests.rpy`** — added `_tl_test_read_pre_save_roots` and `_tl_test_thin_pre_saves_dry_run` in-game tests. Replaced stale `_tl_test_interact_callback_deferred_save` (tested removed deferred-save behavior) with `_tl_test_interact_callback_var_flush` (tests current flush/discard behavior based on `_tl_var_notifs_enabled` flag).
+
+### Refactor: Remove sparse post-choice checkpoint writes
+
+- **`backend/tl_saveload.rpy`** — `_tl_should_save` and `_tl_save_slot` kept as legacy (existing `_ch_*` saves on disk remain loadable as fallback via `_tl_find_nearest_save`); no new sparse saves are written.
+- **`timeline_hooks.rpy`** — checkpoint write block removed from `_tl_interact_callback`; early-save refresh block removed from `_tl_record_before`. `_tl_record_after` no longer sets `_tl_pending_save_index`.
+- **`timeline_init.rpy`** — `_tl_pending_save_index` and `_tl_early_save_idx` defaults kept as legacy (referenced by in-game tests and old saves).
+
+### Feat: Pre-menu checkpoint saves — zero-skip jumps
+
+- **`backend/tl_saveload.rpy`** — added `_tl_pre_save_slot(node_index, context)`, `_tl_find_pre_save(node_index, context, save_dir)`, `_tl_write_pre_save(node_index, context)`. Pre-saves are stripped (no screenshot, 1 rollback entry, ~35–55 KB) and written before each menu fires. `_tl_begin_jump` checks for a pre-save first; if found, loads it directly (zero skip) — the existing `_tl_store_wrapper` auto-select intercept fires immediately on the menu. All mod saves use flat slot names in the root savedir (`_pre_*`, `_ch_*`, `_ch_chap_*`, `_ch_recovery`, `_ch_start`).
+- **`timeline_hooks.rpy`** — `_tl_record_before` calls `_tl_write_pre_save` (guarded by `not _tl_replaying`) after clearing ghost/skip state and before early-save refresh. Skip guard removed so pre-saves are written during skip mode (players skip known content but still want to jump to it).
+- **`timeline_init.rpy`** — removed `_tl_analyze_saves()` diagnostic block (temporary).
+- **`tests/test_saveload.py`** — added `TestPreSaveSlot` (9 tests) and `TestFindPreSave` (6 tests).
+- **`timeline_tests.rpy`** — added `_tl_test_log_truncation`, `_tl_test_pre_save_slot_format`, `_tl_test_pre_save_written` in-game tests.
+
+### Refactor: `tl_ast_walk.rpy` renamed to `tl_ast_utils.rpy`; `_tl_strip_renpy_tags` moved there
+
+- **`backend/tl_ast_utils.rpy`** (renamed from `tl_ast_walk.rpy`) — name better reflects its role as a shared utility module.
+- **`backend/tl_ast_utils.rpy`** — `_tl_strip_renpy_tags` moved here from `timeline_init.rpy`; inline `import re` replaced with module-level `import re as _tl_re_util`. Used by both `tl_ghost_logic.rpy` and `tl_route_logic.rpy` — now lives in the file that loads first.
+- **`timeline_init.rpy`** — `_tl_strip_renpy_tags` definition removed.
+
+### Refactor: Stateful unified AST walk — `_tl_walk_ast_blocks` gains state threading; `_walk_menu_imgs` replaced by `_tl_build_menu_scene_index`
+
+- **`backend/tl_ast_utils.rpy`** — `_tl_walk_ast_blocks` signature changed from `(nodes, visitor_fn)` to `(nodes, visitor_fn, initial_state=None)`. Worklist entries are now `(block, state)` tuples; visitor contract changed from `visitor_fn(node)` to `visitor_fn(node, state) → new_state`. State is threaded sequentially through each block; child blocks (If entries, Menu option blocks) inherit the state at the branch point. Stateless visitors (route, coverage) pass state through unchanged.
+- **`backend/tl_coverage.rpy`** — `_tl_cov_visitor` updated to `(node, state) → state` signature.
+- **`backend/tl_route_logic.rpy`** — `_visitor` in `_tl_ri_collect_assigned` updated to `(node, state) → state` signature.
+- **`backend/tl_assets.rpy`** — new `_tl_build_menu_scene_index(nodes)`: builds `persistent._tl_menu_scene_map` via the shared stateful block walk. `last_img` is the state; Scene/Show nodes update it, Menu nodes record the current value for their site key (backfill only — existing entries not overwritten). Jump-following removed: gaps are covered by `_tl_resolve_live_menu_img_name` (runtime capture) and screenshot fallback.
+- **`timeline_init.rpy`** — `_walk_menu_imgs` recursive closure and its per-label loop replaced with a single `_tl_build_menu_scene_index(nodes)` call in `_tl_build_ast_map`.
+- **`tests/test_route_logic.py`** — `TestWalkAstBlocks` updated for new `(node, state) → state` visitor signature.
+- **`tests/test_ast_walk.py`** (new) — `TestWalkAstBlocksStateful`: state threading, branch inheritance, branch isolation. `TestBuildMenuSceneIndex`: scene-before-menu recording, multi-menu sequencing, branch scene isolation, backfill guard, file filtering.
+
+### Refactor: Canonical game-file filter — `_tl_is_game_file` replaces three scattered checks
+
+- **`backend/tl_ast_utils.rpy`** — added `_tl_is_game_file(f)` as the single definition of "game script vs RenPy internal vs this mod". All mod files (including `timeline_*.rpy`) live under `renpy-chronology-mod/` so the mod-dir check covers them; the previously separate `timeline_*.rpy` basename guard in `_tl_should_track_if_node` was dead code and is removed.
+- **`backend/tl_ghost_logic.rpy`** — deleted `_tl_should_track_if_node` (was a single-condition wrapper with dead code); both call sites now use `_tl_is_game_file` directly.
+- **`backend/tl_route_logic.rpy`** — Python.execute patch guard replaced with `_tl_is_game_file`.
+- **`backend/tl_ast_utils.rpy`** — `_tl_walk_ast_blocks` internal lambda replaced with `_tl_is_game_file`.
+
+### Refactor: Codebase simplification — shared AST utilities, walk deduplication, screen-open caching
+
+- **`backend/tl_ast_utils.rpy`** (new) — shared AST utility module that loads before all other `tl_*.rpy` files (alphabetical `init -2` order). Contains `_tl_ast_literal_value` (Python 2/3 compat literal extractor — replaces scattered `Constant`/`Str`/`Num` isinstance chains), `_tl_extract_compare_literals` (condition string → comparator literals), `_tl_walk_ast_blocks` (game-script-filtered iterative block walker with If/Menu recursion), and `_tl_prettify_var` (moved from `tl_route_logic.rpy`).
+- **`backend/tl_coverage.rpy`** — `_tl_build_coverage_index` walk replaced with `_tl_walk_ast_blocks` + visitor. Removed duplicate `_game_file` lambda, `_visited` set, and 30-line worklist loop.
+- **`backend/tl_route_logic.rpy`** — `_tl_build_route_index` walk replaced with `_tl_walk_ast_blocks` + visitor. Removed duplicate `_game_file` lambda, `_visited` set, and 70-line worklist loop. Three inline Python 2/3 compat chains (`Constant`/`Str`/`Num` ternaries) replaced with `_tl_ast_literal_value`. `_pyast_Constant` intermediate removed. `_tl_prettify_var` removed (now in `tl_ast_utils.rpy`). `_tl_build_route_index` decomposed into three phase functions: `_tl_ri_collect_assigned` (Python/If node walk), `_tl_ri_collect_defaults` (Default node walk), `_tl_ri_build_if_counts` (If condition walk); orchestrator is now 15 lines.
+- **`backend/tl_ghost_logic.rpy`** — inline `Constant`/`Str`/`Num` triple-chain in `_tl_parse_regions` replaced with `_tl_ast_literal_value`.
+- **`timeline_screen.rpy`** — locked branch count moved from inline `python:` block (O(N_branches) per render frame) to `default _tl_locked_count = _tl_count_locked_branches()` (evaluated once per screen open).
+- **`timeline_init.rpy`** — added `_tl_count_locked_branches()` helper used by the screen default above.
+- **`ui/tl_route_screen.rpy`** — `_tl_build_route_chips()` call moved from `python:` block (every render) to `default _tl_route_chips = _tl_build_route_chips()` (once per route screen open).
+- **`tests/conftest.py`** — `tl_ast_utils.rpy` added as first entry in the shared `_rpy_ns` load list.
+- **`tests/test_coverage.py`** (new) — baseline tests for `_tl_build_coverage_index`.
+- **`tests/test_ghost_logic.py`** — added `TestExtractCompareLiterals` (Phase 0B) and two `TestParseRegions` baseline cases.
+- **`tests/test_route_logic.py`** — added `TestWalkAstBlocks` (Phase 0B).
+
+### Fix: Save recursion — ghost_nodes append via `.append()` instead of `+` concatenation
+
+- **`backend/tl_ghost_logic.rpy`** — changed `store._tl_ghost_nodes = store._tl_ghost_nodes + [{...}]` to `store._tl_ghost_nodes.append({...})`. With concatenation, Ren'Py's rollback log stored a full copy of the growing list at every checkpoint; with `.append()`, `RevertableList` tracks only the delta (one element), dramatically reducing rollback log size in sandbox games with many ghost nodes.
+
+### Fix: Route var set cache — function-level default arg instead of store var
+
+- **`backend/tl_route_logic.rpy`** — `_tl_python_execute_patched` now caches the route var frozenset in a function-level mutable default arg (`_cache=[None, None]`), keyed by identity of `persistent._tl_route_var_names`. Replaces `store._tl_route_var_set` which was subject to Ren'Py rollback, causing `rset_size=0` misses after native rollback.
+- **`timeline_init.rpy`** — removed `default _tl_route_var_set`.
+- **`timeline_hooks.rpy`** — removed stale `_tl_on_load` workaround that rebuilt the set after load.
+
+### Refactor: Python.execute patch — targeted co_names diff, moved to tl_route_logic.rpy
+
+- **`backend/tl_route_logic.rpy`** — Python.execute monkeypatch moved here from `tl_ghost_logic.rpy` (correct ownership: var change detection is route tracking, not ghost synthesis). Patch rewritten to use `self.code.bytecode.co_names` to determine which route vars a block might touch, then snapshot and diff only those (~0–5) instead of all ~1000+ route vars. Cost per Python block drops from O(n_route_vars) to O(|co_names ∩ route_vars|) ≈ O(0–5). Hide-mode blocks skipped (they write to local dict, not store). Added `store._tl_route_var_set = frozenset(_route_vars)` at end of route index build for O(1) intersection. Removed `_tl_snapshot_route_vars` and `_tl_diff_route_vars` (logic inlined). Tinting (`_tl_recently_changed_vars`) updated always; pending delta only when notifs enabled — cleanly separating the two concerns at the source. Verified across RenPy 7.4 (Python 2), 8.3.2, and 8.5.2 — `co_names` accessible in all.
+- **`backend/tl_ghost_logic.rpy`** — removed Python.execute patch registration (now in `tl_route_logic.rpy`).
+- **`timeline_init.rpy`** — added `default _tl_route_var_set = frozenset()`; removed `_tl_save_diagnostics` (temporary diagnostic, no longer needed).
+- **`tests/test_route_logic.py`** — replaced `TestDiffRouteVars` with `TestFlushVarChanges` (tests flag behavior, notification content, pending-clear); added flag regression tests to `TestFlushMenuSnap`.
+- **`tests/test_ghost_logic.py`** — rewrote `TestPythonExecutePatched` to use co_names/tinting detection instead of `_tl_diff_route_vars` mock.
+- **`tests/conftest.py`** — `Python` stub now compiles real bytecode from source so `co_names` is accessible in tests.
+- **`docs/NON_INTRUSIVENESS.md`** — updated Python.execute patch file reference.
+
+### Fix: Python 2 (RenPy 7) compatibility — route index, screen scoping, builtin shadowing, markup safety
+
+- **`backend/tl_route_logic.rpy`** — guarded all three `ast.Constant` accesses (assignment RHS, If-condition comparator, domain comparator) behind `_pyast_Constant = getattr(_pyast, "Constant", None)`; added `ast.Name` id check for `"True"`/`"False"` in both literal extraction sites so Python 2 boolean values are collected into the domain (Python 2 represents `True`/`False` as `Name` nodes, not `Constant`); added `_TL_SCALAR_TYPES` including `unicode` on Python 2 so unicode-string store vars are correctly classified as scalars.
+- **`ui/tl_route_screen.rpy`** — replaced genexp in screen `python:` block with listcomp to fix Python 2 scoping issue; replaced `min`/`max` calls with `_TL_MIN`/`_TL_MAX` to avoid game characters with those names shadowing builtins.
+- **`timeline_init.rpy`** — added `_TL_MIN`/`_TL_MAX` pure-Python wrappers (picklable, shadow-safe); added `_tl_strip_renpy_tags(s)` using `re.sub(r'\{[^}]*\}', '', s)`.
+- **`backend/tl_ghost_logic.rpy`** — applied `_tl_strip_renpy_tags` at both return paths of `_tl_prettify_condition`.
+- **`backend/tl_route_logic.rpy`** — applied `_tl_strip_renpy_tags` to var values in `_tl_flush_var_changes` and `_tl_flush_menu_snap`.
+- **`timeline_screen.rpy`** — applied `_tl_strip_renpy_tags` to domain tooltip value rows; replaced `min(...)` position clamp with `_TL_MIN(...)`.
+
+### Revert: Remove `_TlNoSaveList`/`_TlNoSaveSet` — not the root cause of save recursion
+
+- Diagnostics confirmed the recursion originates in `renpy.game.log` (the rollback log itself), not in ghost node contents. The co_names refactor reduces rollback log growth more effectively by limiting how often `_tl_ghost_nodes` changes. `_TlNoSaveList`/`_TlNoSaveSet` classes removed; `_tl_ghost_nodes` and `_tl_skip_ghost_ifs` reverted to plain `[]` / `set()`.
+
+### Cleanup: Remove dead `_tl_ghost_highlight` state (orphaned from stashed causal hint system)
+
+- **`backend/tl_ghost_logic.rpy`** — removed `_tl_toggle_ghost_highlight`.
+- **`ui/tl_ghost_cards.rpy`** — removed `hl` parameter from `tl_ghost_card`; removed `ghost_highlight` parameter from `tl_ghost_rows`; condition label changed from clickable button to non-interactive frame.
+- **`ui/tl_route_screen.rpy`**, **`timeline_init.rpy`**, **`timeline_hooks.rpy`**, **`timeline_save_hooks.rpy`** — removed all references to `_tl_ghost_highlight`.
+
 ### Feature: Var change notifs toggle
 
 - **`timeline_screen.rpy`** — added "Var change notifs ✓/✗" button to the route tab header (hidden on cards tab). Uses `ToggleField(persistent, "_tl_var_notifs_enabled")`.

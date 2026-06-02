@@ -76,7 +76,6 @@ init python:
         _store._tl_modal_node       = None
         _store._tl_chap_end_slot    = ""
         _store._tl_ghost_nodes      = []
-        _store._tl_ghost_highlight  = None
         ## NOTE: _tl_ast_ready and _tl_ast_map are derived from the
         ## static game script (never changes between loads) — do NOT reset them here.
         _tl_log("TL: post-load validation complete ({} nodes)".format(

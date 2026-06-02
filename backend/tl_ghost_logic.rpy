@@ -83,16 +83,7 @@ init python:
         "len","range","int","str","float","bool","list","dict","set",
     ])
 
-    def _tl_prettify_var(name):
-        """Convert a snake_case variable name to a readable label."""
-        _STRIP_PREFIXES = ("mc_", "flag_", "is_", "has_", "ch_")
-        s = name
-        for pfx in _STRIP_PREFIXES:
-            if s.startswith(pfx):
-                s = s[len(pfx):]
-                break
-        parts = s.split("_")
-        return " ".join(p.capitalize() for p in parts if p)
+    ## _tl_prettify_var — defined in tl_ast_utils.rpy (loads before this file)
 
     def _tl_extract_vars_from_conditions(conditions):
         """Return the set of game-variable names referenced across all condition strings."""
@@ -168,13 +159,9 @@ init python:
                         isinstance(n.left, _tl_ast_mod.Name)):
                     var = n.left.id
                     comp = n.comparators[0]
-                    ## Handle both Python 2 (ast.Str) and Python 3 (ast.Constant)
-                    if hasattr(_tl_ast_mod, "Constant") and isinstance(comp, _tl_ast_mod.Constant):
-                        return [{var: frozenset([str(comp.value)])}]
-                    elif hasattr(_tl_ast_mod, "Str") and isinstance(comp, _tl_ast_mod.Str):
-                        return [{var: frozenset([str(comp.s)])}]
-                    elif isinstance(comp, _tl_ast_mod.Num):
-                        return [{var: frozenset([str(comp.n)])}]
+                    _lit = _tl_ast_literal_value(comp)
+                    if _lit is not None:
+                        return [{var: frozenset([_lit])}]
             return None
 
         return _node_to_regions(tree.body)
@@ -248,14 +235,6 @@ init python:
         ghost.setdefault("member_ast_keys", []).append(ast_key)
         return ghost
 
-    def _tl_toggle_ghost_highlight(ast_key, branch_idx):
-        """Toggle ghost branch row highlight on/off."""
-        key = (ast_key, branch_idx)
-        if store._tl_ghost_highlight == key:
-            store._tl_ghost_highlight = None
-        else:
-            store._tl_ghost_highlight = key
-
     def _tl_prettify_condition(cond):
         """Prettify var names and strip quotes from string values; numeric values left as-is."""
         if cond == "True":
@@ -276,14 +255,16 @@ init python:
             _result = cond
             for _s, _e, _pretty in _repls:
                 _result = _result[:_s] + _pretty + _result[_e:]
-            return _result
+            return _tl_strip_renpy_tags(_result)
         except Exception:
             def _repl(m):
                 name = m.group(1)
                 if name in _TL_KW_SKIP or name[0].isupper():
                     return name
                 return _tl_prettify_var(name)
-            return _TL_VAR_RE.sub(_repl, _TL_STR_LIT_RE.sub(lambda m: m.group(0), cond))
+            return _tl_strip_renpy_tags(
+                _TL_VAR_RE.sub(_repl, _TL_STR_LIT_RE.sub(lambda m: m.group(0), cond))
+            )
 
     ## ── If-node ghost tracking ───────────────────────────────────────────────
     ## Monkey-patch renpy.ast.If.execute so we can record branch conditions
@@ -493,7 +474,7 @@ init python:
         if TL_DEBUG_GHOST:
             _tl_log("TL ghost cluster_imgs: {}".format(branch_imgs))
 
-        store._tl_ghost_nodes = store._tl_ghost_nodes + [{
+        store._tl_ghost_nodes.append({
             "type":              "branch",
             "ast_key":           group[0]["ast_key"],
             "conditions":        conditions,
@@ -504,12 +485,12 @@ init python:
             "cluster_with_prev": cluster_with_prev,
             "_regions":          regions,
             "member_ast_keys":   member_ast_keys,
-        }]
+        })
         _tl_log("TL ghost appended cluster: root_ast={} members={} rows={} cluster={}".format(
             group[0]["ast_key"], member_ast_keys, len(conditions), cluster_with_prev))
 
     def _tl_on_if_execute(if_node, taken_index, pre_taken_seen=None):
-        if not _tl_should_track_if_node(if_node):
+        if not _tl_is_game_file(getattr(if_node, "filename", None) or ""):
             return
 
         ## Track which If nodes have been executed for per-session consumed detection.
@@ -562,22 +543,12 @@ init python:
         except Exception as _e:
             _tl_log("TL ghost If error: {}".format(_e))
 
-    def _tl_should_track_if_node(if_node):
-        _filename = getattr(if_node, "filename", None) or ""
-        if not _filename or _filename.startswith("renpy/"):
-            return False
-        if "renpy-chronology-mod" in _filename:
-            return False
-        _base = _filename.rsplit("/", 1)[-1]
-        if _base.startswith("timeline_") and _base.endswith(".rpy"):
-            return False
-        return True
 
     def _tl_if_execute_patched(self):
         ## Evaluate which branch will be taken BEFORE executing so condition
         ## state is captured cleanly (branch body may modify the same vars).
         _taken = _tl_get_taken_branch(self)
-        if _tl_should_track_if_node(self) and TL_DEBUG_GHOST:
+        if _tl_is_game_file(getattr(self, "filename", None) or "") and TL_DEBUG_GHOST:
             try:
                 _conds = [str(e[0]) for e in (getattr(self, "entries", None) or [])]
                 _tl_log("TL if execute: file={} line={} taken={} conds={}".format(
@@ -666,25 +637,28 @@ init python:
         except Exception:
             pass
 
-    ## ── Python.execute patch — immediate var change detection ────────────────
+    ## ── screen-navigate callback — sandbox location-navigation ghost node clear ─
+    ##
+    ## config.statement_callbacks fires before every named statement with the
+    ## statement name string. Both "call screen" and "show screen" cover sandbox
+    ## games that navigate via screen statements (PhotoHunt uses `show screen locN`).
+    ## Menus already clear ghost nodes in _tl_record_before; this covers the
+    ## between-menu navigation that happens in sandbox games.
+    ## Note: renpy.show_screen() from Python does NOT fire statement_callbacks,
+    ## so mod-internal notify calls are unaffected.
 
-    _tl_orig_python_execute = _tl_renpy_ast.Python.execute
-
-    def _tl_python_execute_patched(self):
-        _filename = getattr(self, "filename", None) or ""
-        if not (_filename and
-                not _filename.startswith("renpy/") and
-                "renpy-chronology-mod" not in _filename and
-                getattr(store, "_tl_branch_id", "") and
+    def _tl_on_screen_navigate(name):
+        if name not in ("call screen", "show screen"):
+            return
+        if not (getattr(store, "_tl_branch_id", "") and
                 not getattr(persistent, "_tl_replaying", False) and
                 not config.skipping):
-            return _tl_orig_python_execute(self)
-        _snap = _tl_snapshot_route_vars()
-        _result = _tl_orig_python_execute(self)
-        try:
-            _tl_diff_route_vars(_snap)
-        except Exception as _e:
-            _tl_log("TL python_execute post-processing error: {}".format(_e))
-        return _result
+            return
+        if store._tl_ghost_nodes or store._tl_skip_ghost_ifs:
+            _n = len(store._tl_ghost_nodes)
+            store._tl_ghost_nodes    = []
+            store._tl_skip_ghost_ifs = set()
+            _tl_log("TL screen_navigate: cleared ghost={}".format(_n))
 
-    _tl_renpy_ast.Python.execute = _tl_python_execute_patched
+    config.statement_callbacks.append(_tl_on_screen_navigate)
+

@@ -11,6 +11,7 @@ Functions covered:
   _tl_branch_exits_before_next
   _tl_collect_if_run
   _tl_partition_if_run
+  _tl_extract_compare_literals  [Phase 0B — initially fails until tl_ast_utils.rpy created]
 """
 
 import pytest
@@ -21,6 +22,8 @@ from conftest import (
 )
 
 _extract    = ns["_tl_extract_vars_from_conditions"]
+## Phase 0B: None until backend/tl_ast_utils.rpy is created
+_extract_compare_literals = ns.get("_tl_extract_compare_literals")
 _prettify_v = ns["_tl_prettify_var"]
 _prettify_c = ns["_tl_prettify_condition"]
 _parse      = ns["_tl_parse_regions"]
@@ -189,6 +192,83 @@ class TestParseRegions:
 
     def test_syntax_error_returns_none(self):
         assert _parse("x ==") is None
+
+    ## Phase 0A: baseline — confirms literal extraction in _tl_parse_regions
+    ## before it is refactored to use _tl_extract_compare_literals.
+    def test_equality_string_comparator_captured(self):
+        result = _parse("route == 'romance'")
+        assert result is not None
+        assert any("romance" in str(v) for r in result for v in r.values())
+
+    def test_numeric_comparator_captured(self):
+        result = _parse("affection == 3")
+        assert result is not None
+        assert any("3" in str(v) for r in result for v in r.values())
+
+
+# ---------------------------------------------------------------------------
+# _tl_extract_compare_literals  [Phase 0B — fails until tl_ast_utils.rpy created]
+# ---------------------------------------------------------------------------
+
+class TestExtractCompareLiterals:
+    """
+    Tests for _tl_extract_compare_literals(cond_str) -> list[str].
+
+    This function is extracted from _tl_parse_regions and _tl_build_route_index.
+    It lives in backend/tl_ast_utils.rpy (created in Step 1).
+    These tests FAIL until that file is created.
+    """
+
+    def _fn(self):
+        assert _extract_compare_literals is not None, (
+            "_tl_extract_compare_literals not found — create backend/tl_ast_utils.rpy first"
+        )
+        return _extract_compare_literals
+
+    def test_equality_string_literal(self):
+        fn = self._fn()
+        result = fn("route == 'romance'")
+        assert "romance" in result
+
+    def test_equality_numeric_literal(self):
+        fn = self._fn()
+        result = fn("affection == 3")
+        assert "3" in result
+
+    def test_greater_than_numeric(self):
+        fn = self._fn()
+        result = fn("affection > 3")
+        assert "3" in result
+
+    def test_compound_and_extracts_both(self):
+        fn = self._fn()
+        result = fn("route == 'A' and trust >= 2")
+        assert "A" in result
+        assert "2" in result
+
+    def test_no_compare_node_returns_empty(self):
+        fn = self._fn()
+        assert fn("flag_seen") == []
+
+    def test_malformed_returns_empty_no_exception(self):
+        fn = self._fn()
+        assert fn("x ==") == []
+
+    def test_true_sentinel_returns_empty(self):
+        fn = self._fn()
+        assert fn("True") == []
+
+    def test_else_sentinel_returns_empty(self):
+        fn = self._fn()
+        assert fn("else") == []
+
+    def test_returns_list(self):
+        fn = self._fn()
+        assert isinstance(fn("x == 'a'"), list)
+
+    def test_empty_string_returns_empty(self):
+        fn = self._fn()
+        assert fn("") == []
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +458,6 @@ class TestPartitionIfRun:
 # ---------------------------------------------------------------------------
 
 _notify_branch = ns["_tl_notify_branch"]
-_python_patched = ns["_tl_python_execute_patched"]
 
 
 class TestNotifyBranch:
@@ -454,63 +533,3 @@ class TestNotifyBranch:
         assert len(self._show_screen_calls) == 1
         assert "New path" in self._show_screen_calls[0][1]["message"]
 
-
-# ---------------------------------------------------------------------------
-# _tl_python_execute_patched — filename filter
-# ---------------------------------------------------------------------------
-
-class TestPythonExecutePatched:
-    def setup_method(self):
-        self._orig_calls = []
-        self._branch_id_saved = ns.get("_tl_branch_id", "")
-        ns["store"]._tl_branch_id = "test_branch_abc"
-        ns["persistent"]._tl_replaying = False
-        ns["renpy"].config.skipping = False
-        self._diff_calls = []
-        self._orig_diff = ns["_tl_diff_route_vars"]
-        def _capture_diff(snap):
-            self._diff_calls.append(snap)
-        ns["_tl_diff_route_vars"] = _capture_diff
-
-    def teardown_method(self):
-        ns["store"]._tl_branch_id = self._branch_id_saved
-        ns["persistent"]._tl_replaying = False
-        ns["renpy"].config.skipping = False
-        ns["_tl_diff_route_vars"] = self._orig_diff
-
-    def _make_py(self, filename):
-        from conftest import Python
-        node = Python("x = 1")
-        node.filename = filename
-        return node
-
-    def test_game_script_diff_called(self):
-        ## game script (no renpy/ prefix) with branch_id → diff IS called
-        node = self._make_py("game/scripts/intro.rpy")
-        _python_patched(node)
-        assert len(self._diff_calls) == 1
-
-    def test_game_script_no_game_prefix_diff_called(self):
-        ## RenPy stores paths relative to game/ dir — scripts/ prefix with no game/ prefix
-        ## is a valid game script (e.g. games that archive scripts in scripts.rpa)
-        node = self._make_py("scripts/base/script.rpyc")
-        _python_patched(node)
-        assert len(self._diff_calls) == 1
-
-    def test_mod_file_bypasses_diff(self):
-        ## renpy-chronology-mod in filename → short-circuit, no diff
-        node = self._make_py("game/renpy-chronology-mod/backend/tl_ghost_logic.rpy")
-        _python_patched(node)
-        assert self._diff_calls == []
-
-    def test_non_game_file_bypasses_diff(self):
-        ## renpy/ prefix → RenPy internal, short-circuit, no diff
-        node = self._make_py("renpy/common/_layout.rpym")
-        _python_patched(node)
-        assert self._diff_calls == []
-
-    def test_replaying_bypasses_diff(self):
-        ns["persistent"]._tl_replaying = True
-        node = self._make_py("game/scripts/intro.rpy")
-        _python_patched(node)
-        assert self._diff_calls == []

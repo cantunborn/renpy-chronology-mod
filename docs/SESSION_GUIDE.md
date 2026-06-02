@@ -18,7 +18,7 @@ This project is a Ren'Py chronology mod. It tracks player choices, builds a time
 The mod is split across three layers:
 
 **Top-level entry points (`timeline_*.rpy`)**
-- `timeline_init.rpy` — core state defaults, constants, logging, AST map build, branch ID, img-name migration
+- `timeline_init.rpy` — core state defaults, constants, logging, AST map build, branch ID, img-name migration, thumb cache load/save lifecycle
 - `timeline_hooks.rpy` — menu interception, save triggers, chapter-end hooks, option-condition extraction
 - `timeline_screen.rpy` — thin coordinator; delegates card/ghost/modal rendering to `ui/`
 - `timeline_save_hooks.rpy` — post-load validation and save compatibility

@@ -66,16 +66,21 @@ init python:
         s = "persistent"
         r.check(s, "_tl_replaying is bool",
             isinstance(persistent._tl_replaying, bool))
-        r.check(s, "_tl_thumb_cache is dict",
-            isinstance(persistent._tl_thumb_cache, dict))
         r.check(s, "_tl_replaying default False",
             persistent._tl_replaying == False)
         r.check(s, "_tl_menu_scene_map is dict",
             isinstance(persistent._tl_menu_scene_map, dict))
-        r.check(s, "_tl_asset_thumb_cache is dict",
-            isinstance(persistent._tl_asset_thumb_cache, dict))
         r.check(s, "_tl_var_defaults is dict",
             isinstance(persistent._tl_var_defaults, dict))
+        # Thumb caches live in renpy.game (not persistent) after migration
+        r.check(s, "renpy.game._tl_thumb_cache is dict",
+            isinstance(getattr(renpy.game, "_tl_thumb_cache", None), dict))
+        r.check(s, "renpy.game._tl_asset_thumb_cache is dict",
+            isinstance(getattr(renpy.game, "_tl_asset_thumb_cache", None), dict))
+        r.check(s, "persistent._tl_thumb_cache is empty after migration",
+            not getattr(persistent, "_tl_thumb_cache", None))
+        r.check(s, "persistent._tl_asset_thumb_cache is empty after migration",
+            not getattr(persistent, "_tl_asset_thumb_cache", None))
 
 
     def _tl_test_store_defaults(r):
@@ -139,20 +144,21 @@ init python:
 
 
     def _tl_test_thumb_cache(r):
-        """Thumbnail cache read/write/evict works correctly."""
+        """Thumbnail cache read/write/evict works correctly (renpy.game attrs)."""
         s = "thumb_cache"
-        original = dict(persistent._tl_thumb_cache)
+        _tc = getattr(renpy.game, "_tl_thumb_cache", None)
+        if _tc is None:
+            r.check(s, "renpy.game._tl_thumb_cache exists", False, "attr missing")
+            return
+        original = dict(_tc)
         try:
-            # Write a fake entry
-            persistent._tl_thumb_cache["_test_key_"] = b"fake_png_data"
+            _tc["_test_key_"] = b"fake_png_data"
             r.check(s, "write succeeds",
-                persistent._tl_thumb_cache.get("_test_key_") == b"fake_png_data")
-
-            # Read it back
+                _tc.get("_test_key_") == b"fake_png_data")
             r.check(s, "read back correct",
-                persistent._tl_thumb_cache["_test_key_"] == b"fake_png_data")
+                _tc["_test_key_"] == b"fake_png_data")
 
-            # Eviction: fill to over limit
+            # Eviction: simulate LRU eviction loop against a scratch dict
             original_max = TL_THUMB_CACHE_MAX
             test_cache = {}
             for i in range(original_max + 5):
@@ -166,8 +172,8 @@ init python:
             r.check(s, "eviction drops oldest",
                 "0" not in test_cache)
         finally:
-            # Restore
-            persistent._tl_thumb_cache = original
+            renpy.game._tl_thumb_cache.clear()
+            renpy.game._tl_thumb_cache.update(original)
 
 
     def _tl_test_record_pipeline(r):
@@ -910,56 +916,350 @@ init python:
             persistent._tl_pending_shadow_path = saved_pending_sp
 
 
-    def _tl_test_interact_callback_deferred_save(r):
-        """_tl_interact_callback writes deferred save at pending_save_index; skips during skip mode."""
-        s = "interact_callback_deferred_save"
+    def _tl_test_interact_callback_var_flush(r):
+        """_tl_interact_callback flushes pending var changes; discards when notifs disabled."""
+        s = "interact_callback_var_flush"
 
-        saved_pending_idx  = store._tl_pending_save_index
-        saved_context      = list(_tl_context)
-        saved_history      = list(_tl_history)
-        saved_early_idx    = getattr(store, "_tl_early_save_idx", None)
-        saved_skipping     = config.skipping
-        saved_save         = renpy.save
-        save_calls         = []
+        saved_notifs   = getattr(persistent, "_tl_var_notifs_enabled", True)
+        saved_pending  = dict(getattr(store, "_tl_pending_var_changes", None) or {})
+        show_calls     = []
 
         try:
-            renpy.save = lambda slot: save_calls.append(slot)
-            config.skipping = False
+            ## With notifs enabled: flush clears pending
+            persistent._tl_var_notifs_enabled = True
+            store._tl_pending_var_changes = {"affection": (1, 2)}
+            _saved_show = renpy.show_screen
+            renpy.show_screen = lambda *a, **kw: show_calls.append(kw.get("message", a))
+            try:
+                _tl_interact_callback()
+            finally:
+                renpy.show_screen = _saved_show
+            r.check(s, "notifs enabled: pending cleared",
+                    not getattr(store, "_tl_pending_var_changes", None))
 
-            store._tl_context = [("Q0", 0), ("Q1", 1), ("Q2", 0)]
-            store._tl_history = [{"index": i, "options": ["A"]} for i in range(3)]
-            store._tl_pending_save_index = 2
-
-            _tl_interact_callback()
-
-            r.check(s, "save was called",
-                len(save_calls) >= 1)
-            r.check(s, "slot is for index 2",
-                any(c.startswith("_ch_0002_") for c in save_calls))
-            r.check(s, "pending_save_index cleared",
-                store._tl_pending_save_index is None)
-            r.check(s, "early_save_idx updated",
-                store._tl_early_save_idx == 2)
-
-            ## Skip-mode: save should NOT fire
-            save_calls[:] = []
-            config.skipping = "fast"
-            store._tl_pending_save_index = 2
-
-            _tl_interact_callback()
-
-            r.check(s, "skip: save not called",      len(save_calls) == 0)
-            r.check(s, "skip: index still set",      store._tl_pending_save_index == 2)
+            ## With notifs disabled: discard without showing
+            show_calls[:] = []
+            persistent._tl_var_notifs_enabled = False
+            store._tl_pending_var_changes = {"affection": (1, 2)}
+            _saved_show = renpy.show_screen
+            renpy.show_screen = lambda *a, **kw: show_calls.append(kw.get("message", a))
+            try:
+                _tl_interact_callback()
+            finally:
+                renpy.show_screen = _saved_show
+            r.check(s, "notifs disabled: pending discarded",
+                    not getattr(store, "_tl_pending_var_changes", None))
+            r.check(s, "notifs disabled: no screen shown", len(show_calls) == 0)
 
         except Exception as e:
             r.check(s, "no exception", False, str(e))
         finally:
-            store._tl_pending_save_index = saved_pending_idx
-            store._tl_context            = saved_context
-            store._tl_history            = saved_history
-            store._tl_early_save_idx     = saved_early_idx
-            config.skipping              = saved_skipping
-            renpy.save                   = saved_save
+            persistent._tl_var_notifs_enabled = saved_notifs
+            store._tl_pending_var_changes      = saved_pending
+
+
+    def _tl_test_log_truncation(r):
+        """Truncate log to 1 entry during save — verify save works and log is restored."""
+        s = "log_truncation"
+        import os
+        _savedir = renpy.config.savedir
+
+        def _find_file(slot):
+            for _ext in ("-LT1.save", ".save"):
+                _p = os.path.join(_savedir, slot + _ext)
+                if os.path.exists(_p):
+                    return _p
+            return None
+
+        _slot_full  = "_tl_test_trunc_full"
+        _slot_trunc = "_tl_test_trunc_1"
+        _path_full  = None
+        _path_trunc = None
+        try:
+            _log    = renpy.game.log
+            _before = list(_log.log)
+            _n_full = len(_before)
+
+            r.check(s, "log has entries", _n_full > 0, "log has {} entries".format(_n_full))
+
+            ## full save (no screenshot)
+            renpy.save(_slot_full, include_screenshot=False)
+            _path_full = _find_file(_slot_full)
+            r.check(s, "full save exists", _path_full is not None)
+
+            ## truncated save (1 entry, no screenshot)
+            _save_ok = False
+            try:
+                _log.log = [_before[-1]] if _before else []
+                renpy.save(_slot_trunc, include_screenshot=False)
+                _save_ok = True
+            finally:
+                _log.log = _before
+
+            r.check(s, "truncated save completed", _save_ok)
+            r.check(s, "log restored length", len(_log.log) == _n_full,
+                    "got {} expected {}".format(len(_log.log), _n_full))
+            r.check(s, "log restored identity", _log.log is _before or list(_log.log) == _before)
+
+            _path_trunc = _find_file(_slot_trunc)
+            r.check(s, "truncated save exists", _path_trunc is not None)
+
+            if _path_full and _path_trunc:
+                _sz_full  = os.path.getsize(_path_full)
+                _sz_trunc = os.path.getsize(_path_trunc)
+                r.check(s, "truncated smaller than full",
+                        _sz_trunc < _sz_full,
+                        "{} KB vs {} KB".format(_sz_trunc // 1024, _sz_full // 1024))
+                _tl_log("TL truncation-test: full={} KB ({} entries) trunc={} KB (1 entry)".format(
+                    _sz_full // 1024, _n_full, _sz_trunc // 1024))
+
+        except Exception as _e:
+            r.check(s, "no exception", False, str(_e))
+        finally:
+            for _p in (_path_full, _path_trunc):
+                try:
+                    if _p and os.path.exists(_p):
+                        os.remove(_p)
+                except Exception:
+                    pass
+
+
+    def _tl_test_pre_save_slot_format(r):
+        """_tl_pre_save_slot produces correct format and hash semantics."""
+        s = "pre_save_slot"
+        _fn = globals().get("_tl_pre_save_slot")
+        if _fn is None:
+            r.check(s, "_tl_pre_save_slot exists", False, "function not found")
+            return
+        ctx = [("Choose", 0), ("Attack?", 1)]
+        slot = _fn(2, ctx)
+        r.check(s, "starts with _pre_0002_", slot.startswith("_pre_0002_"))
+        r.check(s, "hash is 6 chars", len(slot.split("_")[-1]) == 6)
+        r.check(s, "deterministic", slot == _fn(2, ctx))
+        r.check(s, "different from post-choice slot", slot != _tl_save_slot(2, ctx))
+        r.check(s, "index sensitive", _fn(2, ctx) != _fn(3, ctx))
+        ctx_b = [("Choose", 0), ("Attack?", 0)]
+        r.check(s, "context sensitive", _fn(2, ctx) != _fn(2, ctx_b))
+        r.check(s, "menu0 constant", _fn(0, []) == _fn(0, [("any", 99)]))
+        r.check(s, "only uses context up to N",
+            _fn(1, [("A", 0)]) == _fn(1, [("A", 0), ("B", 1)]))
+
+
+    def _tl_test_pre_save_written(r):
+        """Pre-save file is written for each menu and is smaller than a full save."""
+        s = "pre_save_written"
+        import os
+        _find = globals().get("_tl_find_pre_save")
+        if _find is None:
+            r.check(s, "_tl_find_pre_save exists", False, "function not found")
+            return
+        _hist = getattr(store, "_tl_history", [])
+        if not _hist:
+            r.check(s, "skipped: no history yet", True, "no choices recorded")
+            return
+        _savedir = renpy.config.savedir
+        _derive = globals().get("_tl_derive_node_menu_site_key")
+        _ok_count = 0
+        _fail_count = 0
+        for _n in _hist:
+            _idx = _n.get("index")
+            if _idx is None:
+                continue
+            _ast_key = _derive(_n) if _derive else None
+            _slot = _find(_idx, list(store._tl_context), _ast_key)
+            if _slot is None:
+                _fail_count += 1
+                continue
+            _ok_count += 1
+            for _ext in ("-LT1.save", ".save"):
+                _p = os.path.join(_savedir, _slot + _ext)
+                if os.path.exists(_p):
+                    _sz = os.path.getsize(_p)
+                    r.check(s, "node {} size < 300 KB".format(_idx),
+                            _sz < 300 * 1024, "{} KB".format(_sz // 1024))
+                    break
+        r.check(s, "at least one pre-save found", _ok_count > 0,
+                "found={} missing={}".format(_ok_count, _fail_count))
+
+
+    def _tl_test_read_pre_save_roots(r):
+        """
+        _tl_read_pre_save_roots reads store var snapshot from a pre-save file
+        without loading the save or mutating game state.
+        """
+        s = "read_pre_save_roots"
+        import os
+        _fn = globals().get("_tl_read_pre_save_roots")
+        if _fn is None:
+            r.check(s, "_tl_read_pre_save_roots exists", False, "function not found")
+            return
+        _find = globals().get("_tl_find_pre_save")
+        if _find is None:
+            r.check(s, "_tl_find_pre_save exists", False, "function not found")
+            return
+
+        _hist = getattr(store, "_tl_history", [])
+        if not _hist:
+            r.check(s, "skipped: no history yet", True, "no choices recorded")
+            return
+
+        _derive = globals().get("_tl_derive_node_menu_site_key")
+        _slot = None
+        for _n in _hist:
+            _idx = _n.get("index")
+            if _idx is not None:
+                _ak = _derive(_n) if _derive else None
+                _s = _find(_idx, list(store._tl_context), _ak)
+                if _s is not None:
+                    _slot = _s
+                    break
+
+        if _slot is None:
+            r.check(s, "skipped: no pre-save on disk", True, "run further to generate pre-saves")
+            return
+
+        ## Snapshot current state before call
+        _hist_before = list(_tl_history)
+
+        try:
+            _roots = _fn(_slot)
+            ## RenPy roots dict may be a subclass — use hasattr instead of isinstance
+            r.check(s, "returns dict-like", hasattr(_roots, "get"),
+                    "got {}".format(type(_roots).__name__))
+            if hasattr(_roots, "get"):
+                r.check(s, "dict is non-empty", len(_roots) > 0)
+                ## RenPy stores store vars as "store.varname" in roots
+                r.check(s, "contains store._tl_history key",
+                        "store._tl_history" in _roots)
+                _roots_hist = _roots.get("store._tl_history")
+                r.check(s, "_tl_history value is list or None",
+                        _roots_hist is None or isinstance(_roots_hist, list))
+        except Exception as _e:
+            r.check(s, "no exception", False, str(_e))
+
+        ## Verify game state unchanged
+        r.check(s, "history unchanged after call",
+                list(_tl_history) == _hist_before)
+
+
+    def _tl_test_thin_pre_saves_dry_run(r):
+        """
+        _tl_thin_pre_saves(dry_run=True) returns keep/delete lists covering all
+        pre-saves in the save directory, without deleting any files.
+        """
+        s = "thin_pre_saves_dry_run"
+        import os
+        _fn = globals().get("_tl_thin_pre_saves")
+        if _fn is None:
+            r.check(s, "_tl_thin_pre_saves exists", False, "function not found")
+            return
+
+        _savedir = renpy.config.savedir
+
+        ## Count _pre_* files before
+        try:
+            _before = set(
+                f.replace("-LT1.save", "").replace(".save", "")
+                for f in os.listdir(_savedir)
+                if f.startswith("_pre_")
+            )
+        except Exception as _e:
+            r.check(s, "savedir readable", False, str(_e))
+            return
+
+        if not _before:
+            r.check(s, "skipped: no pre-saves on disk", True,
+                    "play through more choices first")
+            return
+
+        try:
+            _keep, _delete = _fn(keep_every=5, dry_run=True)
+        except Exception as _e:
+            r.check(s, "no exception", False, str(_e))
+            return
+
+        r.check(s, "returns two lists",
+                isinstance(_keep, list) and isinstance(_delete, list))
+
+        ## After dry run, files should be unchanged
+        try:
+            _after = set(
+                f.replace("-LT1.save", "").replace(".save", "")
+                for f in os.listdir(_savedir)
+                if f.startswith("_pre_")
+            )
+        except Exception as _e:
+            r.check(s, "savedir readable after run", False, str(_e))
+            return
+
+        r.check(s, "no files deleted in dry_run",
+                _after == _before,
+                "before={} after={}".format(len(_before), len(_after)))
+
+        ## keep + delete should partition the pre-save set
+        _reported = set(_keep) | set(_delete)
+        r.check(s, "keep+delete covers all pre-saves",
+                _before.issubset(_reported),
+                "missing={}".format(_before - _reported))
+        r.check(s, "no overlap between keep and delete",
+                len(set(_keep) & set(_delete)) == 0)
+
+        _tl_log("TL thin_pre_saves test: keep={} delete={} total={}".format(
+            len(_keep), len(_delete), len(_before)))
+
+
+    def _tl_test_jump_uses_pre_save(r):
+        """
+        _tl_begin_jump picks up the exact pre-save for the target menu.
+        Reads _tl_load_slot after a simulated jump setup (no actual load).
+        Skipped if fewer than 2 choices recorded (need a past menu to jump to).
+        """
+        s = "jump_uses_pre_save"
+        _begin_jump = globals().get("_tl_begin_jump")
+        _find       = globals().get("_tl_find_pre_save")
+        _derive     = globals().get("_tl_derive_node_menu_site_key")
+        if _begin_jump is None or _find is None:
+            r.check(s, "functions exist", False, "missing _tl_begin_jump or _tl_find_pre_save")
+            return
+
+        _hist = getattr(store, "_tl_history", [])
+        if len(_hist) < 2:
+            r.check(s, "skipped: need ≥2 choices", True, "play further first")
+            return
+
+        ## Pick the oldest history node that has a pre-save on disk
+        _target = None
+        for _n in _hist[:-1]:
+            _idx = _n.get("index")
+            if _idx is None:
+                continue
+            _ak = _derive(_n) if _derive else None
+            if _find(_idx, list(store._tl_context), _ak) is not None:
+                _target = _n
+                break
+
+        if _target is None:
+            r.check(s, "skipped: no pre-save found for any past menu", True,
+                    "run Shift+F9 after playing to menu 2+")
+            return
+
+        _target_idx = _target["index"]
+        _prev_load_slot = getattr(store, "_tl_load_slot", None)
+        _prev_replaying = getattr(persistent, "_tl_replaying", False)
+        try:
+            _result = _begin_jump(_target_idx, 0)
+            r.check(s, "begin_jump returns 'load'", _result == "load",
+                    "got {}".format(_result))
+            _slot = getattr(store, "_tl_load_slot", None)
+            r.check(s, "load_slot is a pre-save slot",
+                    _slot is not None and _slot.startswith("_pre_"),
+                    "got {}".format(_slot))
+            r.check(s, "pre-save slot matches target index",
+                    _slot is not None and "_pre_{:04d}_".format(_target_idx) in _slot,
+                    "slot={} target_idx={}".format(_slot, _target_idx))
+        finally:
+            store._tl_load_slot = _prev_load_slot
+            persistent._tl_replaying = _prev_replaying
 
 
     def _tl_run_tests():
@@ -989,8 +1289,13 @@ init python:
         _tl_test_on_game_start(r)
         _tl_test_on_load(r)
         _tl_test_cancel_replay(r)
-        _tl_test_interact_callback_deferred_save(r)
-
+        _tl_test_interact_callback_var_flush(r)
+        _tl_test_log_truncation(r)
+        _tl_test_pre_save_slot_format(r)
+        _tl_test_pre_save_written(r)
+        _tl_test_read_pre_save_roots(r)
+        _tl_test_jump_uses_pre_save(r)
+        _tl_test_thin_pre_saves_dry_run(r)
         # Write results to debug.txt (renpy-chronology-mod/debug.txt via _tl_log)
         _tl_log("=" * 60)
         _tl_log("CHRONOLOGY TEST RUN")

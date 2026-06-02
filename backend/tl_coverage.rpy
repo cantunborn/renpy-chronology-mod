@@ -15,45 +15,14 @@ init -2 python:
         count as locked and inflate the number permanently.
         """
 
-        _game_file = lambda _f: (
-            bool(_f)
-            and not (_f or "").startswith("renpy/")
-            and "renpy-chronology-mod" not in (_f or "")
-        )
-
         _if_nodes = []
-        _visited  = set()
 
-        _work = []
-        for _ln in nodes:
-            if type(_ln).__name__ != "Label":
-                continue
-            if not _game_file(getattr(_ln, "filename", "")):
-                continue
-            _lb = getattr(_ln, "block", None)
-            if _lb:
-                _work.append(list(_lb) if not isinstance(_lb, list) else _lb)
+        def _tl_cov_visitor(_node, _state, _label=None):
+            if type(_node).__name__ == "If":
+                _if_nodes.append(_node)
+            return _state
 
-        while _work:
-            _block = _work.pop()
-            for _node in (_block or []):
-                _nid = _tl_builtin_id(_node)
-                if _nid in _visited:
-                    continue
-                _visited.add(_nid)
-                _nt = type(_node).__name__
-
-                if _nt == "If":
-                    _if_nodes.append(_node)
-                    for _, _ib in (getattr(_node, "entries", None) or []):
-                        if _ib:
-                            _work.append(_ib)
-
-                elif _nt == "Menu":
-                    for _item in (getattr(_node, "items", None) or []):
-                        _ib = _item[2] if isinstance(_item, (list, tuple)) and len(_item) > 2 else None
-                        if _ib:
-                            _work.append(_ib)
+        _tl_walk_ast_blocks(nodes, _tl_cov_visitor)
 
         _branch_descs = []
         for _node in _if_nodes:

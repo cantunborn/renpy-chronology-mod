@@ -121,6 +121,101 @@ class TestResolveAssetFileATL:
         assert _tl_resolve_asset_file("plain") == "images/plain.jpg"
 
 
+import types as _types
+import importlib as _importlib
+
+def _run_migration(persistent_state, game_state=None):
+    """
+    Execute the one-time persistent→renpy.game thumb cache migration block.
+    Returns (renpy_game, persistent) after execution.
+    """
+    import renpy as _rpy
+    # save and restore renpy.game to avoid polluting other tests
+    _orig_game = _rpy.game
+    _orig_persistent = {}
+
+    _game = _types.SimpleNamespace(**dict(game_state or {}))
+    _rpy.game = _game
+
+    _pers = _types.SimpleNamespace(**dict(persistent_state))
+
+    migration_code = """
+if getattr(persistent, "_tl_thumb_cache", None):
+    renpy.game._tl_thumb_cache.update(persistent._tl_thumb_cache)
+    persistent._tl_thumb_cache = {}
+if getattr(persistent, "_tl_asset_thumb_cache", None):
+    renpy.game._tl_asset_thumb_cache.update(persistent._tl_asset_thumb_cache)
+    persistent._tl_asset_thumb_cache = {}
+"""
+    ns = {
+        "renpy":      _rpy,
+        "persistent": _pers,
+        "__builtins__": __builtins__,
+    }
+    exec(compile(migration_code, "<migration>", "exec"), ns)
+    _rpy.game = _orig_game
+    return _game, _pers
+
+
+class TestThumbCacheMigration:
+    def test_migrates_thumb_cache_from_persistent(self):
+        old = {b"key1": b"png1", b"key2": b"png2"}
+        game, pers = _run_migration(
+            {"_tl_thumb_cache": dict(old)},
+            {"_tl_thumb_cache": {}},
+        )
+        assert game._tl_thumb_cache == old
+        assert not pers._tl_thumb_cache
+
+    def test_migrates_asset_thumb_cache_from_persistent(self):
+        old = {("bg", 320, 180, "cover"): b"png_data"}
+        game, pers = _run_migration(
+            {"_tl_asset_thumb_cache": dict(old)},
+            {"_tl_asset_thumb_cache": {}},
+        )
+        assert game._tl_asset_thumb_cache == old
+        assert not pers._tl_asset_thumb_cache
+
+    def test_skips_migration_when_persistent_empty(self):
+        game, pers = _run_migration(
+            {"_tl_thumb_cache": {}, "_tl_asset_thumb_cache": {}},
+            {"_tl_thumb_cache": {"existing": b"x"}, "_tl_asset_thumb_cache": {}},
+        )
+        # game cache unchanged (no migration ran)
+        assert game._tl_thumb_cache == {"existing": b"x"}
+
+    def test_merges_into_existing_game_cache(self):
+        game, pers = _run_migration(
+            {"_tl_thumb_cache": {"from_pers": b"p"}},
+            {"_tl_thumb_cache": {"pre_existing": b"e"}},
+        )
+        assert game._tl_thumb_cache == {"pre_existing": b"e", "from_pers": b"p"}
+        assert not pers._tl_thumb_cache
+
+    def test_skips_migration_when_attr_absent(self):
+        # persistent has no _tl_thumb_cache attr at all (very old save)
+        game, pers = _run_migration(
+            {},
+            {"_tl_thumb_cache": {}},
+        )
+        assert game._tl_thumb_cache == {}
+
+    def test_migration_is_idempotent(self):
+        old = {"k": b"v"}
+        game, pers = _run_migration(
+            {"_tl_thumb_cache": dict(old)},
+            {"_tl_thumb_cache": {}},
+        )
+        # Second run: persistent is now empty, game already has data
+        game2, pers2 = _run_migration(
+            {"_tl_thumb_cache": dict(pers._tl_thumb_cache)},
+            {"_tl_thumb_cache": dict(game._tl_thumb_cache)},
+        )
+        # No double-migration: game still has the same data
+        assert game2._tl_thumb_cache == old
+        assert not pers2._tl_thumb_cache
+
+
 if __name__ == "__main__":
     passed = failed = 0
     for cls_name, cls in sorted(globals().items()):

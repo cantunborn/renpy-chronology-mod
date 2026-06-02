@@ -10,6 +10,22 @@ All backend files run at `init -2 python:` — before the top-level hooks.
 
 ---
 
+### `backend/tl_ast_utils.rpy`
+
+Shared AST utilities used by multiple backend files. Loads first (alphabetical sort guarantees `tl_ast_utils` < all other `tl_[c-z]*.rpy` files at `init -2`).
+
+**Functions:**
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `_tl_ast_literal_value` | `(node) → str or None` | Returns the string value of an AST literal node. Handles `Constant` (Py 3.8+), `Str`, `Num` (Py 2/3), and `True`/`False` `Name` nodes. Single canonical location for Python 2/3 literal compat — replaces scattered `isinstance(Constant/Str/Num)` chains in callers. |
+| `_tl_extract_compare_literals` | `(cond_str) → list[str]` | Parse a condition string and return all comparator literal values from `Compare` nodes. Works across all comparison operators. Returns `[]` on parse error or if no `Compare` nodes found. |
+| `_tl_walk_ast_blocks` | `(nodes, visitor_fn, initial_state=None) → None` | Walk all `Label` node blocks from game scripts, calling `visitor_fn(node, state) → new_state` once per unique visited node. State is threaded sequentially through each block; child blocks (If entries, Menu option blocks) inherit the state at the branch point — mutations inside a branch do not affect the parent flow. Stateless visitors pass `return state` unchanged. Filters to game scripts only (excludes `renpy/` internals and mod files). Recurses into `If.entries` and `Menu.items` blocks. Uses an object-id visited set to prevent cycles. |
+| `_tl_strip_renpy_tags` | `(s) → str` | Strips `{tag}` markup from a string, leaving inner text. Used by ghost logic and route tracker for display-safe var values and condition labels. |
+| `_tl_prettify_var` | `(name) → str` | Converts a snake_case variable name to a readable label. Strips common prefixes (`mc_`, `flag_`, `is_`, `has_`, `ch_`), splits on `_`, and title-cases each word. Example: `mc_affection_bonus` → `Affection Bonus`. |
+
+---
+
 ### `backend/tl_saveload.rpy`
 
 Checkpoint save/load logic, replay state management, and jump control.
@@ -37,14 +53,19 @@ Checkpoint save/load logic, replay state management, and jump control.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `_tl_should_save` | `(idx, dense=None, every=None) → bool` | Returns True if a checkpoint should be written for this node index; dense saves for first N nodes, sparse every M after. |
-| `_tl_save_slot` | `(node_index, context) → str` | Returns `_ch_{NNNN}_{hash6}` slot name; hash is MD5[:6] of the context tuple. |
+| `_tl_save_no_screenshot` | `(slot) → None` | Writes a save with no screenshot: uses `include_screenshot=False, mutate_flag=False` on RenPy 8+; shadows `interface.get_screenshot` with a 1×1 black PNG on RenPy 7. `mutate_flag=False` skips `location.scan()` (directory listing) after save. Used for all mod-internal saves. |
+| `_tl_pre_save_slot` | `(node_index, context, ast_key=None) → str` | Returns `_pre_{NNNN}_{hash6}` slot name; hash is MD5[:6] of `context[:node_index]` + optional `ast_key`. |
+| `_tl_write_pre_save` | `(node_index, context) → None` | Writes a stripped pre-menu save via `_tl_save_no_screenshot`: no screenshot, rollback log truncated to 1 entry, ~35–55 KB. Called in `_tl_record_before`. |
+| `_tl_find_pre_save` | `(node_index, context, ast_key=None, save_dir=None) → str or None` | Checks root savedir for a pre-save matching this node+context+ast_key; returns slot name or None. |
+| `_tl_should_save` | `(idx, dense=None, every=None) → bool` | **Legacy.** Sparse `_ch_*` saves are no longer written; kept for fallback load of old saves and tests. |
+| `_tl_save_slot` | `(node_index, context) → str` | **Legacy.** Returns `_ch_{NNNN}_{hash6}` slot name; kept for fallback load of old saves and tests. |
 | `_tl_chap_end_slot_name` | `(label, context=None, after_index=None) → str` | Returns `_ch_chap_{label}` or `_ch_chap_{label}_{hash6}` when context is provided. |
 | `_tl_find_nearest_save` | `(target_index, context, save_dir=None, start_exists=None, chap_candidates=None) → str or None` | Scans save dir for the chronology slot with highest index ≤ target_index that shares the same context prefix; falls back to `_ch_start` if present. |
 | `_tl_clear_replay_state` | `() → None` | Clears all replay-related persistent variables and saves persistent data. |
 | `_tl_begin_label_jump` | `(label) → None` | Initiates a chapter-end jump; loads chapter-end save slot if it exists on disk, otherwise rolls back history/context/markers and sets `_tl_label_jump` for fallback. |
-| `_tl_begin_jump` | `(node_index, option_index) → str or None` | Initiates a timeline jump; saves recovery point, stages shadow path, finds nearest save; returns `"load"` if a save was found or None for fallback. |
-| `_tl_cancel_replay` | `() → None` | Cancels an in-progress replay; snapshots current thumbnails to persistent cache before loading the recovery save. |
+| `_tl_find_nearest_pre_save` | `(target_index, context, history=None, save_dir=None) → str or None` | Scans save dir for the `_pre_*` file with the highest index ≤ target_index that matches the context prefix and recorded `ast_key` from history. Used as Tier 2 fallback when an exact pre-save for the target node is absent. |
+| `_tl_begin_jump` | `(node_index, option_index) → str or None` | Initiates a timeline jump via `_tl_save_no_screenshot` for the recovery save; stages shadow path; tries Tier 1 (exact pre-save), Tier 2 (nearest pre-save), Tier 3 (nearest `_ch_*`); returns `"load"` if a save was found or None. |
+| `_tl_cancel_replay` | `() → None` | Cancels an in-progress replay; snapshots current thumbnails to `renpy.game._tl_thumb_cache` before loading the recovery save. |
 
 ---
 
@@ -54,8 +75,10 @@ Asset/thumbnail resolution, image caching, and displayable creation.
 
 **Persistent variables:**
 - `persistent._tl_img_movie_cache` — `{img_name: bool}`; caches movie/webm detection results
-- `persistent._tl_thumb_cache` — `{ast_key: bytes}`; screenshot fallback thumbnail cache
-- `persistent._tl_asset_thumb_cache` — `{cache_key: bytes}`; persistent asset-derived thumbnail bytes
+
+**`renpy.game` attributes (survive `renpy.load()`, not serialised by `save_persistent()`):**
+- `renpy.game._tl_thumb_cache` — `{ast_key: bytes}`; screenshot fallback thumbnail cache. Loaded from `_tl_thumbs.pkl` at game start; written back at quit via `config.quit_callbacks`.
+- `renpy.game._tl_asset_thumb_cache` — `{cache_key: bytes}`; asset-derived thumbnail bytes. Same file and lifecycle.
 
 **Transient (module-level, not saved):**
 - `_tl_asset_thumb_displayable_cache` — `{display_cache_key: Displayable}`; avoids rebuilding displayables each render
@@ -87,18 +110,18 @@ Asset/thumbnail resolution, image caching, and displayable creation.
 | `_tl_get_asset_thumb_bytes` | `(img_name, generate=False, width=None, height=None, fit_mode="cover") → bytes or None` | Returns cached static thumbnail bytes for an img_name; optionally generates them if missing. |
 | `_tl_resolve_live_menu_img_name` | `() → str or None` | Resolves the best currently displayed gameplay image for a menu from live RenPy scene state; prefers background-tagged images. |
 | `_tl_thumb_displayable` | `(thumb_bytes, index) → Displayable` | Creates a RenPy displayable from thumbnail bytes; detects WEBP/JPEG/PNG from magic bytes before creating `im.Data`. |
-| `_tl_node_thumb` | `(node) → bytes or None` | Returns thumbnail bytes for a node, trying `node["thumb_bytes"]` then `persistent._tl_thumb_cache[node["ast_key"]]`. |
+| `_tl_node_thumb` | `(node) → bytes or None` | Returns thumbnail bytes for a node, trying `node["thumb_bytes"]` then `renpy.game._tl_thumb_cache[node["ast_key"]]`. |
 | `_tl_img_thumb_displayable` | `(img_name, width, height, fit_mode="cover") → Displayable or None` | Returns a cached displayable for an asset-backed timeline thumbnail; builds and caches if missing. |
 | `_tl_clear_thumb_cache` | `() → None` | Clears all thumbnail caches (persistent and transient) and notifies the user. |
+| `_tl_build_menu_scene_index` | `(nodes) → None` | Populates `persistent._tl_menu_scene_map` via the shared stateful block walk. `last_img` is the walk state; Scene/Show nodes update it, Menu nodes record it for their site key (backfill only — existing entries not overwritten). Jumps are not followed; gaps are covered by runtime capture (`_tl_resolve_live_menu_img_name`) and screenshot fallback. Called from `_tl_build_ast_map`. |
 
 ---
 
 ### `backend/tl_ghost_logic.rpy`
 
-Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` and `renpy.ast.Python.execute` to track branch conditions and route var changes at runtime.
+Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` to track branch conditions at runtime. Route var change detection (`Python.execute` patch) lives in `tl_route_logic.rpy`.
 
 **Store variables (transient):**
-- `_tl_ghost_highlight` — `(ast_key, branch_idx)` tuple or None; which ghost row is highlighted
 - `_tl_ghost_nodes` — list of ghost card dicts built during gameplay
 - `_tl_skip_ghost_ifs` — set of ast_keys; If nodes whose sibling rows are already emitted
 
@@ -117,10 +140,8 @@ Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` and `renpy.ast.Pytho
 | `_tl_should_cluster` | `(prev_ghost, new_conds) → bool` | Returns True if new_conds are mutually exclusive with prev_ghost's conditions (safe to group visually). |
 | `_tl_branch_exits_before_next` | `(block) → bool` | Returns True when a taken branch clearly exits before sibling ifs can run (explicit Jump/Return). |
 | `_tl_extend_ghost_rows` | `(ghost, ast_key, conditions, seen_fns, branch_imgs, regions, affecting_vars=None) → None` | Appends hidden sibling-if rows into an existing ghost card dict. |
-| `_tl_toggle_ghost_highlight` | `(ast_key, branch_idx) → None` | Toggles ghost branch row highlight on/off in `_tl_ghost_highlight`. |
 | `_tl_extract_vars_from_conditions` | `(conditions) → set` | Extracts variable names from a list of condition strings via `ast.parse`. Walks `ast.Name` nodes; filters out `_TL_KW_SKIP` builtins and names starting with uppercase. Handles bare truthy checks, camelCase names, boolean ops, comparisons, and `not` correctly. Used to populate `affecting_vars` in ghost payloads and to build the route index. |
-| `_tl_prettify_var` | `(name) → str` | Converts a snake_case var name to a readable label. Strips common prefixes (`mc_`, `flag_`, `is_`, `has_`, `ch_`), splits on `_`, and title-cases each word. Example: `mc_affection_bonus` → `Affection Bonus`. |
-| `_tl_prettify_condition` | `(cond) → str` | Prettifies snake_case var names and strips quotes from string values using `ast.parse`. `Name` nodes → `_tl_prettify_var`; `Constant` string nodes → bare value (no quotes); numeric constants left as-is. Applies replacements right-to-left by `col_offset`. Falls back to regex on parse failure. Example: `route_id == "romance"` → `Route Id == romance`. |
+| `_tl_prettify_condition` | `(cond) → str` | Prettifies snake_case var names and strips quotes from string values using `ast.parse`. `Name` nodes → `_tl_prettify_var` (defined in `tl_ast_utils.rpy`); `Constant` string nodes → bare value (no quotes); numeric constants left as-is. Applies replacements right-to-left by `col_offset`. Falls back to regex on parse failure. Example: `route_id == "romance"` → `Route Id == romance`. |
 | `_tl_get_taken_branch` | `(if_node) → int` | Evaluates conditions in order and returns the index of the first True one. |
 | `_tl_build_ghost_payload` | `(if_node, taken_index, context_img=None) → dict or None` | Builds one ghost payload dict for a single If node with conditions, seen_fns, branch_imgs. Returns None when all entries collapse to a single `"True"` condition (no branching content). |
 | `_tl_resolve_cluster_imgs` | `(if_node, context_img) → list` | Resolves per-branch thumbnail images for one If node using cross-branch comparison. |
@@ -131,13 +152,13 @@ Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` and `renpy.ast.Pytho
 | `_tl_should_track_if_node` | `(if_node) → bool` | Returns True if the If node is from a game script: filename is non-empty, does not start with `renpy/` (RenPy internals), does not contain `renpy-chronology-mod`, and is not a `timeline_*.rpy` mod file. |
 | `_tl_if_execute_patched` | `(self) → None` | Replacement for `renpy.ast.If.execute`; evaluates taken branch descriptor **before** executing (pre-execute snapshot) and calls `_tl_on_if_execute`. |
 | `_tl_notify_branch` | `(run, taken_index, pre_taken_seen=None) → None` | Three-tier branch notification: suppress (all branches seen), icon-only `⎇` (taken seen, ≥1 alternative unseen), or "New path" (taken branch itself was never taken before). Uses index-based comparison so equal tuples from different branches are correctly distinguished. |
-| `_tl_python_execute_patched` | `(self) → None` | Replacement for `renpy.ast.Python.execute`; filename-filtered to game scripts only (not `renpy/`, not mod files); guards on `persistent._tl_replaying` and `config.skipping`; calls snapshot → original → diff for route var change detection. Flush happens in `_tl_interact_callback`, not here. |
+| `_tl_on_screen_navigate` | `(name) → None` | Registered on `config.statement_callbacks`. Clears `_tl_ghost_nodes` and `_tl_skip_ghost_ifs` before any `call screen` or `show screen` statement when a branch session is active and not replaying/skipping. Covers sandbox games that navigate via either statement form (IC uses `call screen`, PhotoHunt uses `show screen`). `renpy.show_screen()` from Python does not fire this callback. |
 
 ---
 
 ### `backend/tl_route_logic.rpy`
 
-Route tracker backend: AST index build, chip filtering/ordering, snapshot/diff/flush pipeline, and notification formatting. Runs at `init -2`.
+Route tracker backend: AST index build, chip filtering/ordering, var change detection (`Python.execute` patch), and notification formatting. Runs at `init -2`.
 
 **Persistent variables (survive reloads):**
 - `persistent._tl_route_var_names` — list of var names assigned anywhere in game scripts
@@ -147,6 +168,7 @@ Route tracker backend: AST index build, chip filtering/ordering, snapshot/diff/f
 - `persistent._tl_var_is_numeric` — `set`; var names classified as numeric (assigned via arithmetic)
 
 **Store variables (transient):**
+
 - `store._tl_pending_var_changes` — `{var_name: (old_val, new_val)}`; accumulated since last flush
 - `store._tl_recently_changed_vars` — `set`; vars changed since last menu; cleared at each `_tl_record_before`
 - `store._tl_menu_var_snap` — `{var: value}`; snapshot taken at menu-present time for init-assign detection
@@ -158,11 +180,13 @@ Route tracker backend: AST index build, chip filtering/ordering, snapshot/diff/f
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `_tl_build_route_index` | `(nodes) → None` | Full iterative block walk from Label entry points. Three passes: Python-node (collect var names, numeric detection, domain literals from RHS), Default-node (capture scalar declared defaults into `persistent._tl_var_defaults`; also seeds each default value into `_domain` so the tooltip shows the starting value even for vars never explicitly assigned), and If-node (accumulate `if_count`, collect domain values from equality comparisons). Writes all five persistent keys listed above. |
+| `_tl_ri_collect_assigned` | `(nodes, domain) → (route_vars, numeric_vars, if_nodes)` | Phase 1 of route index build. Walks game-script nodes via `_tl_walk_ast_blocks`; collects var names from `Assign`/`AugAssign` statements, detects numeric vars (arithmetic RHS or augmented assign), collects domain literals from assignment RHS. Mutates `domain` in place. |
+| `_tl_ri_collect_defaults` | `(nodes, route_vars, domain) → defaults` | Phase 2. Walks `Default` AST nodes, evals bytecode to extract scalar declared defaults. Mutates `route_vars` (union) and `domain` (seed default value) in place. Returns `{var: scalar}` dict written to `persistent._tl_var_defaults`. |
+| `_tl_ri_build_if_counts` | `(if_nodes, route_vars, domain) → (if_count, if_key_to_vars)` | Phase 3. Scans collected If nodes for var references (`_tl_extract_vars_from_conditions`) and equality-comparison domain literals (`_tl_ast_literal_value`). Counts per If NODE (not per entry). Mutates `domain` in place. |
+| `_tl_build_route_index` | `(nodes) → None` | Orchestrator: calls the three phase functions above, then writes all persistent keys (`_tl_route_var_names`, `_tl_var_defaults`, `_tl_var_if_count`, `_tl_if_key_to_vars`, `_tl_var_domain`, `_tl_var_is_numeric`). |
 | `_tl_var_consumed` | `(var_name) → bool` | True if `len(_tl_var_if_seen_keys[var]) >= _tl_var_if_count[var]` — every If-entry referencing this var has been visited this session. Returns False when `if_count == 0`. |
 | `_tl_build_route_chips` | `() → list[(str, Any)]` | Filter and sort route vars for chip bar display. Hides vars with None values, non-scalar values, and vars still at their declared default (from `persistent._tl_var_defaults`) unless ghost-highlighted or recently-changed. Also includes highlighted vars present in `persistent._tl_var_defaults` but absent from `persistent._tl_route_var_names` (declared via `default`, only read in conditions, never `$`-assigned). Sorts highlighted (ghost/recently-changed) vars first by `if_count` desc, then remaining by `if_count` desc. |
-| `_tl_snapshot_route_vars` | `() → dict` | Returns `{var: getattr(store, var, None)}` for all `persistent._tl_route_var_names`. |
-| `_tl_diff_route_vars` | `(snap) → None` | Compares current store values against snapshot. Skips unchanged and init vars (old was None). Accumulates into `store._tl_pending_var_changes`; keeps original `old_val` if var already pending. Adds changed vars to `_tl_recently_changed_vars`. |
+| `_tl_python_execute_patched` | `(self) → None` | Replacement for `renpy.ast.Python.execute`. Filename-filtered (game scripts only). Uses `self.code.bytecode.co_names` intersected with a frozenset of route var names (cached in a function-level mutable default arg keyed by identity of `persistent._tl_route_var_names` — not a store var, immune to rollback) to find vars this block might touch (~0–5); skips entirely if intersection is empty or block is hide-mode. Snapshots only the intersected vars, executes, then diffs: updates `_tl_recently_changed_vars` always (tinting); builds `_tl_pending_var_changes` and calls `_tl_flush_var_changes` only when `_tl_var_notifs_enabled` is True and old value was non-None. |
 | `_tl_format_numeric_change` | `(label, old_val, new_val) → str` | Returns `"↑N Label"` or `"↓N Label"`. Omits magnitude when delta is exactly 1. Strips `.0` from integer deltas. Uses DejaVuSans font tags for arrow glyphs. |
 | `_tl_flush_var_changes` | `() → None` | Emits one `renpy.show_screen("_tl_notify", message=...)` for all pending changes, then clears `store._tl_pending_var_changes`. No-op if nothing pending. Multiple changes joined with ` · `. |
 | `_tl_flush_menu_snap` | `() → None` | Handles vars that were `None` at menu-present time but now have a value (first assignment inside menu arm). Non-init vars (old was non-None) are skipped — already handled by the Python.execute patch. Adds emitted vars to `_tl_recently_changed_vars`. Clears `store._tl_menu_var_snap`. |
@@ -302,8 +326,8 @@ Menu interception, save callbacks, replay wrapper, and ghost card hook. Runs at 
 - `_tl_ghost_nodes` — ghost card list (see `backend/tl_ghost_logic.rpy`)
 - `_tl_ghost_highlight` — highlighted ghost row `(ast_key, branch_idx)` or None
 - `_tl_skip_ghost_ifs` — set of ast_keys to skip during ghost lookahead
-- `_tl_early_save_idx` — index of save needing refresh after untracked menus
-- `_tl_pending_save_index` — node index to write checkpoint for after next interact
+- `_tl_early_save_idx` — **legacy**; checkpoint writes removed, kept for old saves/tests
+- `_tl_pending_save_index` — **legacy**; checkpoint writes removed, kept for old saves/tests
 - `_tl_shadow_path` — list of shadow path entries or None
 
 **Persistent variables:**
@@ -321,12 +345,12 @@ Menu interception, save callbacks, replay wrapper, and ghost card hook. Runs at 
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `_tl_record_before` | `(items) → dict or None` | Fires before each menu: evaluates each item's condition (`entry[1]`) to filter available options into `node["options"]` (prompt detected by `block is None`), creates/reuses node with location/AST key/thumbnail, handles replay reuse; called by menu wrappers. |
-| `_tl_record_after` | `(node, chosen_label=None, chosen_index=None) → None` | Fires after choice: records chosen index (prefers index identity over label), extends `_tl_context`, queues deferred save via `_tl_pending_save_index`. |
+| `_tl_record_after` | `(node, chosen_label=None, chosen_index=None) → None` | Fires after choice: records chosen index (prefers index identity over label), extends `_tl_context`. |
 | `_tl_exports_wrapper` | `(items, set=None, args=None, kwargs=None, item_arguments=None) → choice` | Wraps `renpy.exports.menu`; calls `_tl_record_before`, delegates to original, calls `_tl_record_after`. |
 | `_tl_store_wrapper` | `(items) → choice` | Wraps `renpy.store.menu`; handles replay interception (auto-pick at target, skip through path), shadow path match/consume, choice recording. |
 | `_tl_on_game_start` | `() → None` | Registered `start_callback`; clears replay state; writes `_ch_start` save. |
 | `_tl_on_load` | `() → None` | Registered `after_load_callback`; clears stale replay state or resumes valid replay; re-enables skip; restores shadow path from `persistent._tl_pending_shadow_path`; migrates img_names. |
-| `_tl_interact_callback` | `() → None` | Registered `interact_callback`; flushes all accumulated var changes via `_tl_flush_var_changes()` (batched since last interact); writes deferred checkpoint save if `_tl_pending_save_index` is set and not currently skipping. |
+| `_tl_interact_callback` | `() → None` | Registered `interact_callback`; flushes all accumulated var changes via `_tl_flush_var_changes()` (batched since last interact). |
 | `_tl_chapter_label_cb` | `(label_name, abnormal) → None` | Registered `label_callback`; fires when any chapter end label is reached; records `{chapter_name, end_label, after_index}` marker; writes `_ch_chap_{label}_{hash}` save if it doesn't exist on disk. |
 
 ---
@@ -346,8 +370,8 @@ Store/persistent initialization, constants, logging, AST map build, and utility 
 - `_tl_load_slot` (default `""`) — slot for `_tl_do_load` label
 - `_tl_label_jump` (default `""`) — label for fallback chapter jump
 - `_tl_chapter_markers` (default `[]`)
-- `_tl_pending_save_index` (default `None`)
-- `_tl_early_save_idx` (default `None`)
+- `_tl_pending_save_index` (default `None`) — **legacy**; checkpoint writes removed
+- `_tl_early_save_idx` (default `None`) — **legacy**; checkpoint writes removed
 - `_tl_chap_end_slot` (default `""`)
 - `_tl_ast_ready` (default `False`) — True after background AST build completes
 - `_tl_shadow_path` (default `None`)
@@ -356,8 +380,6 @@ Store/persistent initialization, constants, logging, AST map build, and utility 
 
 **Persistent variables (initialized once):**
 - `persistent._tl_replaying` (init `False`)
-- `persistent._tl_thumb_cache` (init `{}`)
-- `persistent._tl_asset_thumb_cache` (init `{}`)
 - `persistent._tl_img_movie_cache` (init `{}`)
 - `persistent._tl_pending_shadow_path` (init `None`)
 - `persistent._tl_menu_scene_map` (init `{}`, version 3) — primary persistent thumbnail identity store
@@ -366,8 +388,8 @@ Store/persistent initialization, constants, logging, AST map build, and utility 
 **Constants:**
 - `TL_THUMB_WIDTH = 320`
 - `TL_THUMB_HEIGHT = 180`
-- `TL_SAVE_EVERY = 10` — checkpoint every N choices past the dense zone
-- `TL_DENSE_SAVES = 5` — save every choice for first N nodes
+- `TL_SAVE_EVERY = 10` — **legacy**; sparse checkpoint writes removed
+- `TL_DENSE_SAVES = 5` — **legacy**; sparse checkpoint writes removed
 - `TL_THUMB_CACHE_MAX = 500` — max cached screenshot thumbnails
 - `TL_PROFILE_TIMELINE = False` — coarse timeline-screen profiling toggle
 - `TL_SIZE_BODY = 21`, `TL_SIZE_TITLE = 38`, `TL_SIZE_DOT = 14`, `TL_SIZE_BADGE = 12`, `TL_SIZE_HEADER = 28`, `TL_SIZE_SUBTITLE = 17`
@@ -384,7 +406,8 @@ Store/persistent initialization, constants, logging, AST map build, and utility 
 | `_tl_perf_reset` | `(scope) → float or None` | Clears profiling stats for a scope and returns a new mark. |
 | `_tl_perf_dump` | `(scope, started_at=None) → None` | Logs accumulated profiling stats via `_tl_log`. |
 | `_tl_new_branch_id` | `() → str` | Returns a 12-character UUID hex string for a new branch. |
-| `_tl_build_ast_map` | `() → None` | Entry point for the background AST walk; sets `_tl_ast_ready = True`, then calls `_tl_build_route_index` and `_tl_build_coverage_index`. |
+| `_tl_count_locked_branches` | `() → int` | Counts globally locked branches by evaluating every descriptor in `persistent._tl_all_branch_descs` via `_tl_eval_seen_fn`. Called once per `timeline` screen open via screen `default _tl_locked_count`. |
+| `_tl_build_ast_map` | `() → None` | Entry point for the background AST walk; sets `_tl_ast_ready = True`, then calls `_tl_build_route_index`, `_tl_build_coverage_index`, and `_tl_build_menu_scene_index`. |
 | `_tl_migrate_img_names` | `() → None` | Stamps `img_name` onto history nodes missing it using `persistent._tl_menu_scene_map`; runs once per load. |
 
 ---

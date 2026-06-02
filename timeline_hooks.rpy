@@ -23,19 +23,32 @@ init -1 python:
 
         ## Ghost nodes accumulated since last menu are now resolved — clear them.
         store._tl_ghost_nodes          = []
-        store._tl_ghost_highlight      = None
         store._tl_skip_ghost_ifs       = set()
         store._tl_recently_changed_vars = set()
 
-        ## Refresh any early save now that we're past any untracked menus
-        ## (image menus, call screens) that may have fired since the save was written.
-        if getattr(store, "_tl_early_save_idx", None) is not None and not persistent._tl_replaying:
-            try:
-                slot = _tl_save_slot(store._tl_early_save_idx, list(_tl_context))
-                renpy.save(slot)
-            except Exception as e:
-                _tl_log("TL ERROR save refresh failed: {}".format(e))
-            store._tl_early_save_idx = None
+        ## Derive ast_key early — needed for pre-save identity and history node.
+        ## Uses the same namemap lookup the history node uses at record time.
+        location  = None
+        ast_key   = None
+        node_type = None
+        try:
+            current = renpy.game.context().current
+            if current is not None:
+                location = current
+                node_obj = renpy.game.script.namemap.get(current)
+                if node_obj is not None:
+                    node_type = type(node_obj).__name__
+                    ast_key = (node_obj.filename, node_obj.linenumber)
+        except Exception as e:
+            _tl_log("TL location lookup failed: {}".format(e))
+
+        ## Write a pre-menu stripped save (no screenshot, 1 rollback entry).
+        ## Landing exactly at menu N means zero-skip jumps — _tl_store_wrapper
+        ## intercepts the menu immediately and auto-selects the target option.
+        ## ast_key is included in the hash so sandbox games where different menus
+        ## share the same (node_index, context prefix) get distinct slot names.
+        if not persistent._tl_replaying:
+            _tl_write_pre_save(_tl_node_count, list(_tl_context), ast_key)
 
         if not _tl_branch_id:
             _tl_branch_id  = _tl_new_branch_id()
@@ -45,9 +58,8 @@ init -1 python:
             ## for jumping to node 0.
             try:
                 import os as _os
-                start_file = _os.path.join(renpy.config.savedir, "_ch_start-LT1.save")
-                if not _os.path.exists(start_file):
-                    renpy.save("_ch_start")
+                if not _os.path.exists(_os.path.join(renpy.config.savedir, "_ch_start-LT1.save")):
+                    _tl_save_no_screenshot("_ch_start")
             except Exception as e:
                 _tl_log("TL ERROR _ch_start write failed: {}".format(e))
 
@@ -91,20 +103,7 @@ init -1 python:
                     _tl_node_count += 1
                     return existing
 
-        location    = None
-        ast_key     = None
-        node_type   = None
         rollback_id = None
-        try:
-            current = renpy.game.context().current
-            if current is not None:
-                location = current
-                node_obj = renpy.game.script.namemap.get(current)
-                if node_obj is not None:
-                    node_type = type(node_obj).__name__
-                    ast_key = (node_obj.filename, node_obj.linenumber)
-        except Exception as e:
-            _tl_log("TL location lookup failed: {}".format(e))
         ## Grab rollback identifier — lets us jump back via RollbackToIdentifier
         ## if this node is still within the rollback log.
         try:
@@ -158,14 +157,15 @@ init -1 python:
         _tl_need_frozen_thumb = bool(node["img_name"] and _tl_img_name_is_movie(node["img_name"]))
         if not node["img_name"] or _tl_need_frozen_thumb:
             cache_key = str(ast_key) if ast_key else None
-            cached_thumb = persistent._tl_thumb_cache.get(cache_key) if cache_key else None
+            _tl_tc = getattr(renpy.game, "_tl_thumb_cache", {})
+            cached_thumb = _tl_tc.get(cache_key) if cache_key else None
             if not persistent._tl_replaying and not cached_thumb and not config.skipping:
                 thumb = _tl_capture_thumbnail()
                 if cache_key and thumb:
                     try:
-                        persistent._tl_thumb_cache[cache_key] = thumb
-                        while len(persistent._tl_thumb_cache) > TL_THUMB_CACHE_MAX:
-                            persistent._tl_thumb_cache.pop(next(iter(persistent._tl_thumb_cache)))
+                        _tl_tc[cache_key] = thumb
+                        while len(_tl_tc) > TL_THUMB_CACHE_MAX:
+                            _tl_tc.pop(next(iter(_tl_tc)))
                     except Exception as e:
                         _tl_log("TL thumb cache write failed: {}".format(e))
                         node["thumb_bytes"] = thumb
@@ -213,12 +213,7 @@ init -1 python:
             repr(node["options"][chosen_index]) if chosen_index < len(node["options"]) else None,
             _choice_source))
 
-        if not persistent._tl_replaying:
-            ## Cannot save here — mid-interaction saves capture rollback
-            ## state from before this interaction, so _tl_history and
-            ## _tl_context would be missing the current node.
-            ## Defer to _tl_interact_callback which fires after interact ends.
-            store._tl_pending_save_index = node["index"]
+        pass  ## checkpoint saves removed; pre-saves cover all menus
 
 
     _tl_pending = [None]
@@ -371,7 +366,7 @@ init python:
     def _tl_on_game_start():
         try:
             _tl_clear_replay_state()
-            renpy.save("_ch_start")
+            _tl_save_no_screenshot("_ch_start")
         except Exception as e:
             _tl_log("TL ERROR initial save failed: {}".format(e))
 
@@ -397,40 +392,33 @@ init python:
                 renpy.save_persistent()
                 _tl_log("TL on_load: store._tl_shadow_path set count={}".format(
                     len(store._tl_shadow_path) if isinstance(store._tl_shadow_path, list) else store._tl_shadow_path))
-        ## Write _ch_start if it doesn't exist yet
+        ## Write _ch_start if it doesn't exist yet.
         import os as _os
-        start_file = _os.path.join(renpy.config.savedir, "_ch_start-LT1.save")
-        if not _os.path.exists(start_file):
+        if not _os.path.exists(_os.path.join(renpy.config.savedir, "_ch_start-LT1.save")):
             try:
-                renpy.save("_ch_start")
+                _tl_save_no_screenshot("_ch_start")
             except Exception as e:
                 _tl_log("TL ERROR start save failed on load: {}".format(e))
+        ## Ghost nodes are ephemeral — always reset on load to clear any stale
+        ## state (including old _TlNoRollbackList saves from a previous session).
+        store._tl_ghost_nodes    = []
+        store._tl_skip_ghost_ifs = set()
         ## Backfill img_name on history nodes from the persistent scene map.
-        _tl_migrate_img_names()
+        ## Skip on replay loads — pre-save was written this session so all
+        ## nodes already have img_name populated.
+        if not persistent._tl_replaying:
+            _tl_migrate_img_names()
 
     def _tl_interact_callback():
         if not hasattr(store, "_tl_history"):
             return  ## store defaults not yet applied (pre-game-start interact)
+
         ## Flush all var changes accumulated since the last interact as one batched
         ## notification. When disabled: discard instead so enabling mid-session starts clean.
         if getattr(persistent, "_tl_var_notifs_enabled", True):
             _tl_flush_var_changes()
         else:
             store._tl_pending_var_changes = {}
-        ## Checkpoint saves: skip during skip mode to avoid racing with image loading.
-        ## Pending index is left set so the save fires at the next non-skip interaction.
-        if not config.skipping and store._tl_pending_save_index is not None:
-            idx = store._tl_pending_save_index
-            store._tl_pending_save_index = None
-            ## Save every choice for the first TL_DENSE_SAVES nodes (covers early
-            ## mandatory inputs like name entry), then every TL_SAVE_EVERY after.
-            if _tl_should_save(idx):
-                try:
-                    slot = _tl_save_slot(idx, list(_tl_context))
-                    renpy.save(slot)
-                    store._tl_early_save_idx = idx
-                except Exception as e:
-                    _tl_log("TL ERROR deferred save failed idx={}: {}".format(idx, e))
 
     config.start_callbacks.append(_tl_on_game_start)
     config.after_load_callbacks.append(_tl_on_load)
@@ -467,16 +455,12 @@ init python:
             ).hexdigest()[:6]
             _chap_slot = "_ch_chap_{}_{}".format(label_name, _h6)
             import os as _os
-            _sd = renpy.config.savedir
-            _slot_exists = (
-                _os.path.exists(_os.path.join(_sd, "{}-LT1.save".format(_chap_slot))) or
-                _os.path.exists(_os.path.join(_sd, "{}.save".format(_chap_slot)))
-            )
-            if _slot_exists:
+            _chap_exists, _ = _tl_chap_slot_exists(_chap_slot)
+            if _chap_exists:
                 _tl_log("TL chapter-end save skipped (exists): {}".format(_chap_slot))
             else:
                 try:
-                    renpy.save(_chap_slot)
+                    _tl_save_no_screenshot(_chap_slot)
                     _tl_log("TL chapter-end save: {}".format(_chap_slot))
                 except Exception as e:
                     _tl_log("TL ERROR chapter-end save failed: {}".format(e))

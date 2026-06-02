@@ -71,9 +71,7 @@ screen timeline():
     default tl_view            = "cards"   ## "cards" | "route"
     default tl_route_expanded  = False
     default tl_route_hover     = None
-
-    python:
-        _tl_perf_screen_t0 = _tl_perf_reset("timeline")
+    default _tl_locked_count   = _tl_count_locked_branches()
 
     key "chronology_toggle" action Function(_tl_toggle, "cards")
     key "chronology_route"  action Function(_tl_toggle, "route")
@@ -174,13 +172,9 @@ screen timeline():
                     null xsize 16
 
                 python:
-                    _tl_perf_t0 = _tl_perf_mark()
                     _tl_playthrough_new = sum(
                         1 for _n in _tl_history if _tl_node_has_new(_n))
-                    _tl_perf_add("timeline.playthrough_new", _tl_perf_t0)
-                    _tl_branch_descs = getattr(persistent, "_tl_all_branch_descs", None) or []
-                    _tl_locked       = sum(1 for _d in _tl_branch_descs if not _tl_eval_seen_fn(_d))
-                    _tl_show_locked  = _tl_locked > 0 or _tl_playthrough_new > 0
+                    _tl_show_locked  = _tl_locked_count > 0 or _tl_playthrough_new > 0
 
                 if _tl_show_locked:
                     null xsize 20
@@ -206,7 +200,7 @@ screen timeline():
                                     color TL["new_dot"]
                                     yalign 0.5
 
-                        if _tl_locked > 0:
+                        if _tl_locked_count > 0:
                             hbox:
                                 spacing 10
                                 yalign 0.5
@@ -217,8 +211,8 @@ screen timeline():
                                     yalign 0.5
                                     italic False
                                 text "{} branch{} left to unlock".format(
-                                        _tl_locked,
-                                        "es" if _tl_locked != 1 else ""):
+                                        _tl_locked_count,
+                                        "es" if _tl_locked_count != 1 else ""):
                                     style "tl_base"
                                     size TL_SIZE_BODY
                                     color TL["new_dot"]
@@ -290,7 +284,6 @@ screen timeline():
                 yadjustment ui.adjustment(value=999999)
 
                 python:
-                    _tl_perf_t0 = _tl_perf_mark()
                     _tl_side_pad = 40
                     _tl_spacing  = 16
                     _tl_avail    = config.screen_width - (_tl_side_pad * 2)
@@ -320,7 +313,6 @@ screen timeline():
                     for _m in _tl_chapter_markers:
                         if _m["chapter_name"] not in _tl_marked_chapters:
                             _tl_items.append(("divider", _m["chapter_name"], _m["end_label"]))
-                    _tl_perf_add("timeline.items_build", _tl_perf_t0)
 
                 frame:
                     style "tl_frame_base"
@@ -355,8 +347,8 @@ screen timeline():
     if tl_view == "route" and tl_route_hover is not None:
         python:
             _tt_hx, _tt_hy = getattr(store, "_tl_route_hover_pos", (0, 0))
-            _tt_x  = min(_tt_hx + 14, config.screen_width  - 240)
-            _tt_y  = min(_tt_hy + 14, config.screen_height - 160)
+            _tt_x  = _TL_MIN(_tt_hx + 14, config.screen_width  - 240)
+            _tt_y  = _TL_MIN(_tt_hy + 14, config.screen_height - 160)
             _tt_numeric = tl_route_hover in (getattr(persistent, "_tl_var_is_numeric", None) or set())
             _tt_domain  = [] if _tt_numeric else (
                 (getattr(persistent, "_tl_var_domain", None) or {}).get(tl_route_hover) or []
@@ -410,14 +402,11 @@ screen timeline():
                                 else:
                                     null xsize 14
 
-                                text _tt_val:
+                                text _tl_strip_renpy_tags(_tt_val):
                                     style "tl_base"
                                     size TL_SIZE_BODY
                                     color _tt_val_color
                                     yalign 0.5
-
-    python:
-        _tl_perf_dump("timeline", _tl_perf_screen_t0)
 
     button:
         style "tl_frame_base"

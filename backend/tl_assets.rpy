@@ -300,7 +300,7 @@ init -2 python:
         _key = _tl_asset_thumb_cache_key(img_name, width, height, fit_mode)
         if not _key:
             return None
-        _cache = persistent._tl_asset_thumb_cache or {}
+        _cache = getattr(renpy.game, "_tl_asset_thumb_cache", {})
         _bytes = _cache.get(_key)
         if _bytes is not None:
             if TL_LOG_ASSET_THUMB_HITS:
@@ -313,7 +313,6 @@ init -2 python:
             _cache[_key] = _bytes
             while len(_cache) > TL_ASSET_THUMB_CACHE_MAX:
                 _cache.pop(next(iter(_cache)))
-            persistent._tl_asset_thumb_cache = _cache
             _tl_log("TL asset thumb generated: img_name={}".format(img_name))
         return _bytes
 
@@ -357,55 +356,86 @@ init -2 python:
             return None
 
     def _tl_node_thumb(node):
-        """Return thumbnail bytes for a node: from the node itself or the persistent cache."""
+        """Return thumbnail bytes for a node: from the node itself or the cache."""
         b = node.get("thumb_bytes")
         if b:
             return b
         key = str(node["ast_key"]) if node.get("ast_key") else None
-        return persistent._tl_thumb_cache.get(key) if key else None
+        _tc = getattr(renpy.game, "_tl_thumb_cache", {})
+        return _tc.get(key) if key else None
 
     def _tl_img_thumb_displayable(img_name, width, height, fit_mode="cover"):
         """Return a cached displayable for an asset-backed timeline thumbnail."""
-        _tl_perf_t0 = _tl_perf_mark()
         _cache_key = _tl_asset_thumb_display_cache_key(img_name, width, height, fit_mode)
-        try:
-            if _cache_key and _cache_key in _tl_asset_thumb_displayable_cache:
-                return _tl_asset_thumb_displayable_cache[_cache_key]
-            _asset_thumb = _tl_get_asset_thumb_bytes(
-                img_name,
-                generate=True,
-                width=TL_THUMB_WIDTH,
-                height=TL_THUMB_HEIGHT,
-                fit_mode="cover",
-            )
-            if _asset_thumb:
-                _base = _tl_thumb_displayable(_asset_thumb, _tl_asset_thumb_display_id(img_name))
-            elif _tl_resolve_asset_file(img_name):
-                ## Safe fallback for plain file-backed images when thumb generation misses.
-                _base = img_name
-            else:
-                ## Dynamic images (for example ConditionSwitch / composites) are not safe
-                ## to render directly inside the timeline screen.
-                return None
-            _disp = Transform(
-                _base,
-                xsize=width,
-                ysize=height,
-                fit=fit_mode,
-                xalign=0.5,
-                yalign=0.5,
-            )
-            if _cache_key:
-                _tl_asset_thumb_displayable_cache[_cache_key] = _disp
-            return _disp
-        finally:
-            _tl_perf_add("thumb.displayable", _tl_perf_t0)
+        if _cache_key and _cache_key in _tl_asset_thumb_displayable_cache:
+            return _tl_asset_thumb_displayable_cache[_cache_key]
+        _asset_thumb = _tl_get_asset_thumb_bytes(
+            img_name,
+            generate=True,
+            width=TL_THUMB_WIDTH,
+            height=TL_THUMB_HEIGHT,
+            fit_mode="cover",
+        )
+        if _asset_thumb:
+            _base = _tl_thumb_displayable(_asset_thumb, _tl_asset_thumb_display_id(img_name))
+        elif _tl_resolve_asset_file(img_name):
+            ## Safe fallback for plain file-backed images when thumb generation misses.
+            _base = img_name
+        else:
+            ## Dynamic images (for example ConditionSwitch / composites) are not safe
+            ## to render directly inside the timeline screen.
+            return None
+        _disp = Transform(
+            _base,
+            xsize=width,
+            ysize=height,
+            fit=fit_mode,
+            xalign=0.5,
+            yalign=0.5,
+        )
+        if _cache_key:
+            _tl_asset_thumb_displayable_cache[_cache_key] = _disp
+        return _disp
 
     def _tl_clear_thumb_cache():
-        persistent._tl_thumb_cache = {}
-        persistent._tl_asset_thumb_cache = {}
+        renpy.game._tl_thumb_cache      = {}
+        renpy.game._tl_asset_thumb_cache = {}
         _tl_asset_thumb_displayable_cache.clear()
         _tl_asset_thumb_file_cache.clear()
-        renpy.save_persistent()
         renpy.notify("Chronology: thumbnail cache cleared.")
+
+    def _tl_build_menu_scene_index(nodes):
+        """
+        Walk all Label blocks and populate persistent._tl_menu_scene_map with
+        the scene image showing just before each menu. Backfill only — existing
+        entries (runtime-captured) are not overwritten.
+
+        Uses _tl_walk_ast_blocks with last_img as state. Scene/Show nodes update
+        state; Menu nodes record the current state for their site key. Jumps are
+        not followed — gaps are covered by runtime capture and screenshot fallback.
+        """
+        if persistent._tl_menu_scene_map is None:
+            persistent._tl_menu_scene_map = {}
+        _new_entries = [0]
+
+        def _visitor(_node, _last_img, _label=None):
+            _nt = type(_node).__name__
+            if _nt in ("Scene", "Show"):
+                _img = _tl_scene_stmt_img_name(_node)
+                if _img:
+                    return _img
+            elif _nt == "Menu":
+                _mk = _tl_menu_site_key(_node.filename, _node.linenumber)
+                if _mk and _mk not in persistent._tl_menu_scene_map:
+                    if _last_img:
+                        persistent._tl_menu_scene_map[_mk] = _last_img
+                        _new_entries[0] += 1
+                    else:
+                        _tl_log("TL ast-walk miss: menu=({},{}) last_img=None".format(
+                            _node.filename, _node.linenumber))
+            return _last_img
+
+        _tl_walk_ast_blocks(nodes, _visitor, initial_state=None)
+        if _new_entries[0]:
+            _tl_log("TL menu_scene_map: {} new entries cached".format(_new_entries[0]))
 

@@ -27,7 +27,7 @@ _tl_renpy_ast.If.execute = _tl_if_execute_patched
 
 ### `renpy.ast.Python.execute`
 
-**File:** `backend/tl_ghost_logic.rpy`
+**File:** `backend/tl_route_logic.rpy`
 
 ```python
 _tl_orig_python_execute = _tl_renpy_ast.Python.execute

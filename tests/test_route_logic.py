@@ -3,21 +3,25 @@ test_route_logic.py — Unit tests for backend/tl_route_logic.rpy.
 
 Functions covered:
   _tl_format_numeric_change
-  _tl_diff_route_vars
+  _tl_flush_var_changes
   _tl_flush_menu_snap
   _tl_var_consumed
   _tl_build_route_chips
+  _tl_python_execute_patched
+  _tl_walk_ast_blocks  [Phase 0B — initially fails until tl_ast_utils.rpy created]
 """
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from conftest import _rpy_ns as ns
+from conftest import _rpy_ns as ns, If, Label, Say, Return, Menu
 
-_format_change   = ns["_tl_format_numeric_change"]
-_diff_route_vars = ns["_tl_diff_route_vars"]
-_flush_menu_snap = ns["_tl_flush_menu_snap"]
-_var_consumed    = ns["_tl_var_consumed"]
-_build_chips     = ns["_tl_build_route_chips"]
+_format_change    = ns["_tl_format_numeric_change"]
+_flush_var_changes = ns["_tl_flush_var_changes"]
+_flush_menu_snap  = ns["_tl_flush_menu_snap"]
+_var_consumed     = ns["_tl_var_consumed"]
+_build_chips      = ns["_tl_build_route_chips"]
+## Phase 0B: None until backend/tl_ast_utils.rpy is created
+_walk_ast_blocks  = ns.get("_tl_walk_ast_blocks")
 
 
 # =============================================================================
@@ -51,68 +55,69 @@ class TestFormatNumericChange:
 
 
 # =============================================================================
-# _tl_diff_route_vars
+# _tl_flush_var_changes
 # =============================================================================
 
-class TestDiffRouteVars:
+class TestFlushVarChanges:
     def setup_method(self):
-        self._saved_pending = getattr(ns["store"], "_tl_pending_var_changes", {})
-        self._saved_rcv     = getattr(ns["store"], "_tl_recently_changed_vars", set())
+        self._saved_pending  = getattr(ns["store"], "_tl_pending_var_changes", {})
+        self._saved_numeric  = ns["persistent"]._tl_var_is_numeric
+        self._saved_enabled  = getattr(ns["persistent"], "_tl_var_notifs_enabled", False)
+        self._notify_calls   = []
+        self._saved_show     = ns["renpy"].show_screen
+        ns["renpy"].show_screen = lambda name, **kw: self._notify_calls.append(kw.get("message", ""))
         ns["store"]._tl_pending_var_changes = {}
-        ns["store"]._tl_recently_changed_vars = set()
-        self._saved_route_names = ns["persistent"]._tl_route_var_names
-        ns["persistent"]._tl_route_var_names = ["affection", "route_id", "trust"]
+        ns["persistent"]._tl_var_is_numeric = set()
+        ns["persistent"]._tl_var_notifs_enabled = True
 
     def teardown_method(self):
-        ns["store"]._tl_pending_var_changes = self._saved_pending
-        ns["store"]._tl_recently_changed_vars = self._saved_rcv
-        ns["persistent"]._tl_route_var_names = self._saved_route_names
-        for v in ("affection", "route_id", "trust"):
-            if hasattr(ns["store"], v):
-                delattr(ns["store"], v)
+        ns["store"]._tl_pending_var_changes       = self._saved_pending
+        ns["persistent"]._tl_var_is_numeric       = self._saved_numeric
+        ns["persistent"]._tl_var_notifs_enabled   = self._saved_enabled
+        ns["renpy"].show_screen                    = self._saved_show
 
-    def _set_var(self, name, value):
-        setattr(ns["store"], name, value)
+    def test_no_pending_is_noop(self):
+        ns["store"]._tl_pending_var_changes = {}
+        _flush_var_changes()
+        assert self._notify_calls == []
 
-    def test_unchanged_var_not_in_pending(self):
-        self._set_var("affection", 3)
-        snap = {"affection": 3}
-        _diff_route_vars(snap)
-        assert "affection" not in ns["store"]._tl_pending_var_changes
+    def test_shows_screen_when_enabled(self):
+        ns["store"]._tl_pending_var_changes = {"affection": (0, 3)}
+        _flush_var_changes()
+        assert len(self._notify_calls) == 1
+        assert "Affection" in self._notify_calls[0]
 
-    def test_changed_var_added_to_pending(self):
-        self._set_var("affection", 5)
-        snap = {"affection": 3}
-        _diff_route_vars(snap)
-        assert "affection" in ns["store"]._tl_pending_var_changes
-        assert ns["store"]._tl_pending_var_changes["affection"] == (3, 5)
+    def test_no_notification_when_flag_disabled(self):
+        ## Regression: flag must be checked inside the function, not only at call sites.
+        ## Without this guard, calls from tl_ghost_logic.rpy bypassed the flag entirely.
+        ns["persistent"]._tl_var_notifs_enabled = False
+        ns["store"]._tl_pending_var_changes = {"affection": (0, 3)}
+        _flush_var_changes()
+        assert self._notify_calls == []
 
-    def test_changed_var_already_pending_keeps_original_old(self):
-        self._set_var("affection", 7)
-        ns["store"]._tl_pending_var_changes = {"affection": (1, 5)}
-        snap = {"affection": 5}
-        _diff_route_vars(snap)
-        old, new = ns["store"]._tl_pending_var_changes["affection"]
-        assert old == 1   ## original old preserved
-        assert new == 7   ## new value updated
+    def test_clears_pending_when_disabled(self):
+        ns["persistent"]._tl_var_notifs_enabled = False
+        ns["store"]._tl_pending_var_changes = {"affection": (0, 3)}
+        _flush_var_changes()
+        assert ns["store"]._tl_pending_var_changes == {}
 
-    def test_none_in_snap_init_skipped(self):
-        self._set_var("route_id", "romance")
-        snap = {"route_id": None}
-        _diff_route_vars(snap)
-        assert "route_id" not in ns["store"]._tl_pending_var_changes
+    def test_clears_pending_after_flush(self):
+        ns["store"]._tl_pending_var_changes = {"affection": (0, 3)}
+        _flush_var_changes()
+        assert ns["store"]._tl_pending_var_changes == {}
 
-    def test_changed_var_added_to_recently_changed(self):
-        self._set_var("trust", 2)
-        snap = {"trust": 0}
-        _diff_route_vars(snap)
-        assert "trust" in ns["store"]._tl_recently_changed_vars
+    def test_numeric_var_uses_arrow_format(self):
+        ns["persistent"]._tl_var_is_numeric = {"affection"}
+        ns["store"]._tl_pending_var_changes = {"affection": (0, 3)}
+        _flush_var_changes()
+        assert len(self._notify_calls) == 1
+        assert "↑" in self._notify_calls[0]
 
-    def test_unchanged_var_not_in_recently_changed(self):
-        self._set_var("affection", 3)
-        snap = {"affection": 3}
-        _diff_route_vars(snap)
-        assert "affection" not in ns["store"]._tl_recently_changed_vars
+    def test_non_numeric_var_uses_arrow_format(self):
+        ns["store"]._tl_pending_var_changes = {"route_id": ("neutral", "romance")}
+        _flush_var_changes()
+        assert len(self._notify_calls) == 1
+        assert "→" in self._notify_calls[0]
 
 
 # =============================================================================
@@ -127,14 +132,17 @@ class TestFlushMenuSnap:
         self._saved_show    = ns["renpy"].show_screen
         ns["renpy"].show_screen = lambda name, **kw: self._notify_calls.append(kw.get("message", ""))
         ns["store"]._tl_recently_changed_vars = set()
-        self._saved_numeric = ns["persistent"]._tl_var_is_numeric
+        self._saved_numeric  = ns["persistent"]._tl_var_is_numeric
+        self._saved_enabled  = getattr(ns["persistent"], "_tl_var_notifs_enabled", False)
         ns["persistent"]._tl_var_is_numeric = set()
+        ns["persistent"]._tl_var_notifs_enabled = True
 
     def teardown_method(self):
         ns["store"]._tl_menu_var_snap = self._saved_snap
         ns["store"]._tl_recently_changed_vars = self._saved_rcv
         ns["renpy"].show_screen = self._saved_show
         ns["persistent"]._tl_var_is_numeric = self._saved_numeric
+        ns["persistent"]._tl_var_notifs_enabled = self._saved_enabled
         for v in ("new_var", "route_id"):
             if hasattr(ns["store"], v):
                 delattr(ns["store"], v)
@@ -177,6 +185,14 @@ class TestFlushMenuSnap:
         ns["store"]._tl_menu_var_snap = {"route_id": None}
         _flush_menu_snap()
         assert ns["store"]._tl_menu_var_snap is None
+
+    def test_no_notification_when_flag_disabled(self):
+        ## Regression: flag must be checked inside _tl_flush_menu_snap itself.
+        ns["persistent"]._tl_var_notifs_enabled = False
+        setattr(ns["store"], "route_id", "romance")
+        ns["store"]._tl_menu_var_snap = {"route_id": None}
+        _flush_menu_snap()
+        assert self._notify_calls == []
 
 
 # =============================================================================
@@ -352,3 +368,186 @@ class TestBuildRouteChips:
         match = next((c for c in chips if c[0] == "affection"), None)
         assert match is not None
         assert match[1] == 42
+
+
+# ---------------------------------------------------------------------------
+# _tl_py_pre_var_snap / _tl_py_post_var_diff — filename filter and co_names detection
+# ---------------------------------------------------------------------------
+
+_py_pre_var_snap  = ns["_tl_py_pre_var_snap"]
+_py_post_var_diff = ns["_tl_py_post_var_diff"]
+
+
+def _run_var_hooks(node):
+    """Run pre+post var hooks with store.x mutated between them (simulates execution)."""
+    snap = _py_pre_var_snap(node)
+    setattr(ns["store"], "x", 1)   ## simulate Python block setting x=1
+    _py_post_var_diff(snap)
+
+
+class TestPythonExecutePatched:
+    """
+    Tests for the filename filter and co_names detection in the var-change hooks.
+    We set _tl_route_var_names = ["x"], source "x = 1" compiles co_names with "x".
+    Pre-hook snapshots x=0, post-hook sees x=1 → detectable via _tl_recently_changed_vars.
+    """
+    def setup_method(self):
+        self._branch_id_saved  = ns.get("_tl_branch_id", "")
+        self._saved_rnames     = getattr(ns["persistent"], "_tl_route_var_names", [])
+        self._saved_rcv        = getattr(ns["store"], "_tl_recently_changed_vars", set())
+        self._saved_enabled    = getattr(ns["persistent"], "_tl_var_notifs_enabled", False)
+        ns["store"]._tl_branch_id = "test_branch_abc"
+        ns["persistent"]._tl_replaying = False
+        ns["renpy"].config.skipping = False
+        ns["persistent"]._tl_route_var_names = ["x"]
+        ns["store"]._tl_recently_changed_vars = set()
+        ns["persistent"]._tl_var_notifs_enabled = False
+        setattr(ns["store"], "x", 0)
+
+    def teardown_method(self):
+        ns["store"]._tl_branch_id = self._branch_id_saved
+        ns["persistent"]._tl_route_var_names = self._saved_rnames
+        ns["store"]._tl_recently_changed_vars = self._saved_rcv
+        ns["persistent"]._tl_replaying = False
+        ns["persistent"]._tl_var_notifs_enabled = self._saved_enabled
+        ns["renpy"].config.skipping = False
+        if hasattr(ns["store"], "x"):
+            delattr(ns["store"], "x")
+
+    def _make_py(self, filename):
+        from conftest import Python
+        node = Python("x = 1")
+        node.filename = filename
+        return node
+
+    def test_game_script_processing_happens(self):
+        ## game script (no renpy/ prefix) with branch_id → var change detected, tinting updated
+        node = self._make_py("game/scripts/intro.rpy")
+        _run_var_hooks(node)
+        assert "x" in ns["store"]._tl_recently_changed_vars
+
+    def test_game_script_no_game_prefix_processing_happens(self):
+        ## RenPy stores paths relative to game/ dir — scripts/ prefix with no game/ prefix
+        ## is a valid game script (e.g. games that archive scripts in scripts.rpa)
+        node = self._make_py("scripts/base/script.rpyc")
+        _run_var_hooks(node)
+        assert "x" in ns["store"]._tl_recently_changed_vars
+
+    def test_mod_file_bypasses_processing(self):
+        ## renpy-chronology-mod in filename → short-circuit before var processing
+        node = self._make_py("game/renpy-chronology-mod/backend/tl_ghost_logic.rpy")
+        _run_var_hooks(node)
+        assert "x" not in ns["store"]._tl_recently_changed_vars
+
+    def test_non_game_file_bypasses_processing(self):
+        ## renpy/ prefix → RenPy internal, short-circuit before var processing
+        node = self._make_py("renpy/common/_layout.rpym")
+        _run_var_hooks(node)
+        assert "x" not in ns["store"]._tl_recently_changed_vars
+
+    def test_replaying_bypasses_processing(self):
+        ns["persistent"]._tl_replaying = True
+        node = self._make_py("game/scripts/intro.rpy")
+        _run_var_hooks(node)
+        assert "x" not in ns["store"]._tl_recently_changed_vars
+
+
+# =============================================================================
+# _tl_walk_ast_blocks  [Phase 0B — fails until backend/tl_ast_utils.rpy created]
+# =============================================================================
+
+class TestWalkAstBlocks:
+    """
+    Tests for _tl_walk_ast_blocks(nodes, visitor_fn, initial_state=None).
+
+    visitor_fn(node, state) -> new_state is called once per unique visited node.
+    The walker starts from Label nodes in game scripts, recurses into
+    If entries and Menu item blocks. Already-seen nodes are skipped.
+    """
+
+    def _fn(self):
+        assert _walk_ast_blocks is not None, (
+            "_tl_walk_ast_blocks not found — create backend/tl_ast_utils.rpy first"
+        )
+        return _walk_ast_blocks
+
+    def _visited_types(self, nodes):
+        """Return list of node type names visited."""
+        fn = self._fn()
+        seen = []
+        def v(n, s, _l=None): seen.append(type(n).__name__); return s
+        fn(nodes, v)
+        return seen
+
+    def test_if_node_visited(self):
+        say = Say("char", identifier="id_a")
+        if_node = If(entries=[("x == 1", [say])])
+        label = Label([if_node])
+        types = self._visited_types([label])
+        assert "If" in types
+
+    def test_say_inside_if_visited(self):
+        say = Say("char", identifier="id_a")
+        if_node = If(entries=[("x == 1", [say])])
+        label = Label([if_node])
+        types = self._visited_types([label])
+        assert "Say" in types
+
+    def test_menu_node_visited(self):
+        menu = Menu(items=[])
+        label = Label([menu])
+        types = self._visited_types([label])
+        assert "Menu" in types
+
+    def test_already_seen_node_not_revisited(self):
+        say = Say("char", identifier="id_a")
+        if_node = If(entries=[("x == 1", [say]), ("True", [say])])
+        label = Label([if_node])
+        fn = self._fn()
+        count = [0]
+        def visitor(n, s, _l=None):
+            if type(n).__name__ == "Say":
+                count[0] += 1
+            return s
+        fn([label], visitor)
+        assert count[0] == 1
+
+    def test_non_label_nodes_ignored(self):
+        say = Say("char", identifier="id_a")
+        if_node = If(entries=[("x == 1", [say])])
+        fn = self._fn()
+        visited = []
+        def v(n, s, _l=None): visited.append(n); return s
+        fn([if_node], v)
+        assert visited == []
+
+    def test_renpy_internal_label_excluded(self):
+        say = Say("char", identifier="id_a")
+        if_node = If(entries=[("x == 1", [say])])
+        label = Label([if_node])
+        label.filename = "renpy/common/00start.rpy"
+        types = self._visited_types([label])
+        assert "If" not in types
+
+    def test_empty_nodes_list(self):
+        fn = self._fn()
+        visited = []
+        def v(n, s, _l=None): visited.append(n); return s
+        fn([], v)
+        assert visited == []
+
+    def test_multiple_labels_all_visited(self):
+        say_a = Say("char", identifier="id_a")
+        say_b = Say("char", identifier="id_b")
+        if_a = If(entries=[("x == 1", [say_a])])
+        if_b = If(entries=[("y == 2", [say_b])])
+        label_a = Label([if_a])
+        label_b = Label([if_b])
+        fn = self._fn()
+        count = [0]
+        def visitor(n, s, _l=None):
+            if type(n).__name__ == "If":
+                count[0] += 1
+            return s
+        fn([label_a, label_b], visitor)
+        assert count[0] == 2

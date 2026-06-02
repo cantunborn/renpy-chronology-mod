@@ -9,6 +9,11 @@ from conftest import _rpy_ns, _tl_validate_history
 _tl_save_slot            = _rpy_ns["_tl_save_slot"]
 _tl_find_nearest_save    = _rpy_ns["_tl_find_nearest_save"]
 _tl_should_save          = _rpy_ns["_tl_should_save"]
+_tl_pre_save_slot        = _rpy_ns.get("_tl_pre_save_slot")
+_tl_find_pre_save        = _rpy_ns.get("_tl_find_pre_save")
+_tl_find_nearest_pre_save = _rpy_ns.get("_tl_find_nearest_pre_save")
+_tl_path_has_danger       = _rpy_ns.get("_tl_path_has_danger")
+
 
 # =============================================================================
 # _tl_save_slot
@@ -354,6 +359,358 @@ class TestFindNearestSaveDensePattern:
             assert result == _tl_save_slot(9, ctx[:10])
 
 
+
+
+# =============================================================================
+# _tl_pre_save_slot
+# =============================================================================
+
+class TestPreSaveSlot:
+    def setup_method(self):
+        assert _tl_pre_save_slot is not None, "_tl_pre_save_slot not found in namespace"
+
+    def test_format(self):
+        slot = _tl_pre_save_slot(0, [])
+        assert slot.startswith("_pre_0000_")
+
+    def test_index_padded(self):
+        assert _tl_pre_save_slot(1,    []).startswith("_pre_0001_")
+        assert _tl_pre_save_slot(99,   []).startswith("_pre_0099_")
+        assert _tl_pre_save_slot(9999, []).startswith("_pre_9999_")
+
+    def test_hash_length_is_6(self):
+        slot = _tl_pre_save_slot(5, [("a", 0)])
+        suffix = slot.split("_")[-1]
+        assert len(suffix) == 6
+
+    def test_deterministic(self):
+        ctx = [("Choose", 0), ("Attack?", 1)]
+        assert _tl_pre_save_slot(2, ctx) == _tl_pre_save_slot(2, ctx)
+
+    def test_context_sensitive(self):
+        # Different choice at index 1 → different hash at node 2
+        ctx_a = [("Choose", 0), ("Attack?", 0)]
+        ctx_b = [("Choose", 0), ("Attack?", 1)]
+        assert _tl_pre_save_slot(2, ctx_a) != _tl_pre_save_slot(2, ctx_b)
+
+    def test_index_sensitive(self):
+        ctx = [("Choose", 0)]
+        assert _tl_pre_save_slot(0, ctx) != _tl_pre_save_slot(1, ctx)
+
+    def test_different_from_post_choice(self):
+        # Pre-save hashes context[:N], post-choice hashes full context — must differ
+        ctx = [("Choose", 0), ("Attack?", 1)]
+        assert _tl_pre_save_slot(2, ctx) != _tl_save_slot(2, ctx)
+
+    def test_menu0_empty_context_is_constant(self):
+        # context[:0] == [] for all playthroughs — menu 0 always same hash
+        assert _tl_pre_save_slot(0, []) == _tl_pre_save_slot(0, [("any", 99)])
+
+    def test_uses_only_context_up_to_n(self):
+        # context[N:] is irrelevant — same prefix → same slot
+        ctx_short = [("A", 0)]
+        ctx_long  = [("A", 0), ("B", 1), ("C", 2)]
+        assert _tl_pre_save_slot(1, ctx_short) == _tl_pre_save_slot(1, ctx_long)
+
+    def test_ast_key_affects_hash(self):
+        # Different ast_key → different slot (sandbox disambiguator)
+        ctx = [("A", 0)]
+        slot_a = _tl_pre_save_slot(3, ctx, ast_key=("game/loc1.rpy", 10))
+        slot_b = _tl_pre_save_slot(3, ctx, ast_key=("game/loc2.rpy", 10))
+        assert slot_a != slot_b
+
+    def test_ast_key_none_differs_from_given(self):
+        ctx = [("A", 0)]
+        assert _tl_pre_save_slot(3, ctx, ast_key=None) != _tl_pre_save_slot(3, ctx, ast_key=("game/foo.rpy", 5))
+
+    def test_ast_key_deterministic(self):
+        ctx = [("A", 0)]
+        ak = ("game/loc1.rpy", 42)
+        assert _tl_pre_save_slot(3, ctx, ast_key=ak) == _tl_pre_save_slot(3, ctx, ast_key=ak)
+
+
+# =============================================================================
+# _tl_find_pre_save
+# =============================================================================
+
+def make_pre_save_files(save_dir, entries):
+    """entries: list of (node_index, context) or (node_index, context, ast_key)."""
+    for entry in entries:
+        idx, ctx = entry[0], entry[1]
+        ak = entry[2] if len(entry) > 2 else None
+        slot = _tl_pre_save_slot(idx, ctx, ast_key=ak)
+        open(os.path.join(save_dir, slot + "-LT1.save"), "w").close()
+
+
+class TestFindPreSave:
+    def setup_method(self):
+        assert _tl_find_pre_save is not None, "_tl_find_pre_save not found in namespace"
+
+    def test_returns_none_when_no_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            assert _tl_find_pre_save(3, [("A", 0)], save_dir=d) is None
+
+    def test_finds_lt1_extension(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)]
+            make_pre_save_files(d, [(3, ctx)])
+            result = _tl_find_pre_save(3, ctx, save_dir=d)
+            assert result == _tl_pre_save_slot(3, ctx)
+
+    def test_finds_plain_extension(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)]
+            slot = _tl_pre_save_slot(3, ctx)
+            open(os.path.join(d, slot + ".save"), "w").close()
+            assert _tl_find_pre_save(3, ctx, save_dir=d) == slot
+
+    def test_wrong_hash_returns_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            # File exists but with wrong context hash
+            ctx_a = [("A", 0)]
+            ctx_b = [("A", 1)]
+            make_pre_save_files(d, [(3, ctx_a)])
+            assert _tl_find_pre_save(3, ctx_b, save_dir=d) is None
+
+    def test_wrong_index_returns_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)]
+            make_pre_save_files(d, [(4, ctx)])
+            assert _tl_find_pre_save(3, ctx, save_dir=d) is None
+
+    def test_returns_slot_not_path(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)]
+            make_pre_save_files(d, [(3, ctx)])
+            result = _tl_find_pre_save(3, ctx, save_dir=d)
+            assert result is not None
+            assert not os.sep in result
+            assert result.startswith("_pre_")
+
+    def test_ast_key_match_finds_file(self):
+        # File written with ast_key; lookup with same ast_key finds it
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)]
+            ak  = ("game/loc1.rpy", 42)
+            make_pre_save_files(d, [(3, ctx, ak)])
+            assert _tl_find_pre_save(3, ctx, ast_key=ak, save_dir=d) == _tl_pre_save_slot(3, ctx, ak)
+
+    def test_ast_key_mismatch_returns_none(self):
+        # File written with ast_key; lookup with None misses it
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)]
+            ak  = ("game/loc1.rpy", 42)
+            make_pre_save_files(d, [(3, ctx, ak)])
+            assert _tl_find_pre_save(3, ctx, ast_key=None, save_dir=d) is None
+
+    def test_ast_key_wrong_file_returns_none(self):
+        # File written for loc1; lookup for loc2 misses it
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)]
+            make_pre_save_files(d, [(3, ctx, ("game/loc1.rpy", 42))])
+            assert _tl_find_pre_save(3, ctx, ast_key=("game/loc2.rpy", 42), save_dir=d) is None
+
+
+# =============================================================================
+# _tl_find_nearest_pre_save
+# =============================================================================
+
+class TestFindNearestPreSave:
+    def setup_method(self):
+        assert _tl_find_nearest_pre_save is not None, "_tl_find_nearest_pre_save not found"
+
+    def test_returns_none_when_empty(self):
+        with tempfile.TemporaryDirectory() as d:
+            assert _tl_find_nearest_pre_save(5, [("A", 0)], save_dir=d) is None
+
+    def test_returns_none_when_only_above_target(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0), ("B", 1)]
+            make_pre_save_files(d, [(6, ctx)])
+            assert _tl_find_nearest_pre_save(5, ctx, save_dir=d) is None
+
+    def test_finds_exact_match(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0), ("B", 1)]
+            make_pre_save_files(d, [(5, ctx)])
+            result = _tl_find_nearest_pre_save(5, ctx, save_dir=d)
+            assert result == _tl_pre_save_slot(5, ctx)
+
+    def test_finds_below_target(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0), ("B", 1), ("C", 0)]
+            make_pre_save_files(d, [(3, ctx)])
+            result = _tl_find_nearest_pre_save(5, ctx, save_dir=d)
+            assert result == _tl_pre_save_slot(3, ctx)
+
+    def test_returns_highest_of_multiple_matches(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0), ("B", 1), ("C", 0), ("D", 1), ("E", 0)]
+            make_pre_save_files(d, [(1, ctx), (3, ctx), (5, ctx)])
+            result = _tl_find_nearest_pre_save(4, ctx, save_dir=d)
+            assert result == _tl_pre_save_slot(3, ctx)
+
+    def test_wrong_hash_excluded(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx_a = [("A", 0), ("B", 0)]
+            ctx_b = [("A", 0), ("B", 1)]  ## different choice at index 1
+            make_pre_save_files(d, [(3, ctx_a)])
+            assert _tl_find_nearest_pre_save(5, ctx_b, save_dir=d) is None
+
+    def test_handles_malformed_filename(self):
+        with tempfile.TemporaryDirectory() as d:
+            ## Write a malformed _pre_* file that doesn't parse cleanly
+            open(os.path.join(d, "_pre_XXXX-LT1.save"), "w").close()
+            open(os.path.join(d, "_pre_-LT1.save"), "w").close()
+            ctx = [("A", 0)]
+            result = _tl_find_nearest_pre_save(5, ctx, save_dir=d)
+            assert result is None  ## no crash, no false positive
+
+    def test_ignores_non_pre_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)]
+            open(os.path.join(d, "_ch_0003_abc123-LT1.save"), "w").close()
+            assert _tl_find_nearest_pre_save(5, ctx, save_dir=d) is None
+
+    def test_returns_slot_not_path(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0), ("B", 1)]
+            make_pre_save_files(d, [(2, ctx)])
+            result = _tl_find_nearest_pre_save(5, ctx, save_dir=d)
+            assert result is not None
+            assert os.sep not in result
+            assert result.startswith("_pre_")
+
+    def test_history_ast_key_used_for_hash(self):
+        # File written with ast_key; scan finds it when history supplies matching ast_key
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0), ("B", 1)]
+            ak  = ("game/loc1.rpy", 42)
+            make_pre_save_files(d, [(2, ctx, ak)])
+            history = [{"index": 2, "ast_key": list(ak)}]
+            result = _tl_find_nearest_pre_save(5, ctx, history=history, save_dir=d)
+            assert result == _tl_pre_save_slot(2, ctx, ak)
+
+    def test_history_ast_key_wrong_misses(self):
+        # File written with ast_key; scan misses when history has different ast_key
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0), ("B", 1)]
+            make_pre_save_files(d, [(2, ctx, ("game/loc1.rpy", 42))])
+            history = [{"index": 2, "ast_key": ["game/loc2.rpy", 42]}]
+            result = _tl_find_nearest_pre_save(5, ctx, history=history, save_dir=d)
+            assert result is None
+
+    def test_no_history_falls_back_to_null_ast_key(self):
+        # No history → ast_key=None; file written without ast_key is found
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0), ("B", 1)]
+            make_pre_save_files(d, [(2, ctx)])  # ast_key=None
+            result = _tl_find_nearest_pre_save(5, ctx, save_dir=d)
+            assert result == _tl_pre_save_slot(2, ctx)
+
+
+# =============================================================================
+# _tl_path_has_danger
+# =============================================================================
+
+import conftest as _cf
+
+Jump   = _cf.Jump
+Menu   = _cf.Menu
+If     = _cf.If
+
+class TestPathHasDanger:
+    def setup_method(self):
+        assert _tl_path_has_danger is not None, "_tl_path_has_danger not found"
+
+    def _danger(self, block, roots=None, label_map=None, danger_labels=None):
+        return _tl_path_has_danger(
+            block,
+            roots or {},
+            label_map or {},
+            danger_labels or set(),
+        )
+
+    def test_empty_block_is_safe(self):
+        assert self._danger([]) is False
+
+    def test_menu_stops_walk(self):
+        assert self._danger([Menu()]) is False
+
+    def test_jump_to_danger_label(self):
+        assert self._danger([Jump("bad")], danger_labels={"bad"}) is True
+
+    def test_jump_to_safe_label(self):
+        assert self._danger([Jump("safe")], danger_labels=set()) is False
+
+    def test_jump_to_unknown_label_is_safe(self):
+        ## label not in label_map, not in danger — nothing to follow
+        assert self._danger([Jump("unknown")]) is False
+
+    def test_jump_then_menu_in_target(self):
+        ## Jump to label whose block contains only a Menu → safe
+        assert self._danger(
+            [Jump("a")],
+            label_map={"a": [Menu()]},
+            danger_labels={"bad"},
+        ) is False
+
+    def test_jump_chain_reaches_danger(self):
+        ## Jump → a → Jump → bad; "bad" in danger_labels
+        assert self._danger(
+            [Jump("a")],
+            label_map={"a": [Jump("bad")]},
+            danger_labels={"bad"},
+        ) is True
+
+    def test_jump_cycle_no_infinite_loop(self):
+        ## a → a (cycle); must terminate
+        assert self._danger(
+            [Jump("a")],
+            label_map={"a": [Jump("a")]},
+            danger_labels=set(),
+        ) is False
+
+    def test_if_true_branch_follows_danger(self):
+        if_node = If(entries=[("True", [Jump("bad")])])
+        assert self._danger([if_node], danger_labels={"bad"}) is True
+
+    def test_if_false_branch_skipped(self):
+        ## "False" evaluates to False — branch not followed
+        if_node = If(entries=[("False", [Jump("bad")])])
+        assert self._danger([if_node], danger_labels={"bad"}) is False
+
+    def test_if_eval_true_from_roots(self):
+        if_node = If(entries=[("route == 'romance'", [Jump("bad")])])
+        assert self._danger(
+            [if_node],
+            roots={"route": "romance"},
+            danger_labels={"bad"},
+        ) is True
+
+    def test_if_eval_false_from_roots_skips_branch(self):
+        if_node = If(entries=[("route == 'romance'", [Jump("bad")])])
+        assert self._danger(
+            [if_node],
+            roots={"route": "friendship"},
+            danger_labels={"bad"},
+        ) is False
+
+    def test_if_eval_error_conservative(self):
+        ## Undefined name → NameError → conservative → follows branch → True
+        if_node = If(entries=[("undefined_var_xyz + something", [Jump("bad")])])
+        assert self._danger([if_node], danger_labels={"bad"}) is True
+
+    def test_if_else_branch(self):
+        ## "else" is treated same as "True"
+        if_node = If(entries=[("else", [Jump("bad")])])
+        assert self._danger([if_node], danger_labels={"bad"}) is True
+
+    def test_node_before_menu_stops_at_menu(self):
+        ## Say-like stub before Menu — should still stop at Menu, not danger beyond
+        class Say(_cf._TLNode):
+            def __init__(self): super().__init__("Say")
+        assert self._danger([Say(), Menu(), Jump("bad")], danger_labels={"bad"}) is False
 
 
 if __name__ == "__main__":

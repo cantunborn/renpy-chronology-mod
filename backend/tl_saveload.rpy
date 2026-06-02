@@ -5,8 +5,12 @@
 
 init -2 python:
 
+    ## ── Legacy: post-choice checkpoint slot naming ───────────────────────────
+    ## Sparse _ch_* saves are no longer written; pre-saves cover all menus.
+    ## These functions are kept so existing saves on disk remain loadable as
+    ## fallback (via _tl_find_nearest_save) and so legacy tests still pass.
+
     def _tl_should_save(idx, dense=None, every=None):
-        """Return True if a checkpoint save should be written for this node index."""
         d = dense if dense is not None else TL_DENSE_SAVES
         e = every if every is not None else TL_SAVE_EVERY
         return idx < d or idx % e == e - 1
@@ -15,6 +19,152 @@ init -2 python:
         raw = repr(tuple(context))
         h6  = _tl_hashlib.md5(raw.encode("utf-8")).hexdigest()[:6]
         return "_ch_{:04d}_{}".format(node_index, h6)
+
+    ## ─────────────────────────────────────────────────────────────────────────
+
+    def _tl_pre_save_slot(node_index, context, ast_key=None):
+        """Slot name for a pre-menu stripped save at node_index.
+        Hash input is (context[:node_index], ast_key) — path + menu identity.
+        ast_key=(file, line) disambiguates sandbox games where multiple different
+        menus can appear at the same node_index on the same context prefix."""
+        raw = repr((tuple(context[:node_index]), ast_key))
+        h6  = _tl_hashlib.md5(raw.encode("utf-8")).hexdigest()[:6]
+        return "_pre_{:04d}_{}".format(node_index, h6)
+
+    def _tl_find_pre_save(node_index, context, ast_key=None, save_dir=None):
+        """Return pre-menu save slot for node_index if it exists on disk, else None."""
+        import os as _os
+        _slot = _tl_pre_save_slot(node_index, context, ast_key)
+        _root = save_dir if save_dir is not None else renpy.config.savedir
+        for _ext in ("-LT1.save", ".save"):
+            if _os.path.exists(_os.path.join(_root, _slot + _ext)):
+                return _slot
+        return None
+
+    def _tl_find_nearest_pre_save(target_index, context, history=None, save_dir=None):
+        """
+        Return the pre-menu save slot with the highest index <= target_index
+        that shares the same (context prefix, ast_key) as recorded in history.
+
+        Unlike _tl_find_pre_save (exact match), this scans all _pre_* files.
+        Used as a fallback when the exact pre-save for a target menu was deleted
+        (e.g. by _tl_thin_pre_saves). The found save requires skip replay from
+        its menu index up to the target, same as _ch_* fallback saves.
+
+        history: list of history node dicts (from _tl_history). For each candidate
+        file at index _idx, the node's ast_key is looked up from history to compute
+        the expected hash — consistent with how _tl_pre_save_slot builds the slot.
+        If history is None or the node is not found, ast_key=None is used.
+        """
+        import os as _os
+        _root = save_dir if save_dir is not None else renpy.config.savedir
+        _best_index = -1
+        _best_slot  = None
+        try:
+            for _fname in _os.listdir(_root):
+                if not _fname.startswith("_pre_"):
+                    continue
+                _name  = _fname.replace("-LT1.save", "").replace(".save", "")
+                _parts = _name.split("_")
+                ## ['', 'pre', '0027', 'hash']
+                if len(_parts) < 4:
+                    continue
+                try:
+                    _idx = int(_parts[2])
+                except ValueError:
+                    continue
+                if _idx > target_index:
+                    continue
+                ## Look up ast_key for this index from history
+                _hist_node = None
+                if history:
+                    for _n in history:
+                        if _n.get("index") == _idx:
+                            _hist_node = _n
+                            break
+                _ast_key      = _tl_derive_node_menu_site_key(_hist_node) if _hist_node else None
+                _expected_slot = _tl_pre_save_slot(_idx, context, _ast_key)
+                if _parts[3] != _expected_slot.split("_")[-1]:
+                    continue
+                if _idx > _best_index:
+                    _best_index = _idx
+                    _best_slot  = _name
+        except Exception as _e:
+            _tl_log("TL find_nearest_pre_save scan error: {}".format(_e))
+        return _best_slot
+
+    ## Minimal 1×1 black PNG — used to suppress full screenshots on RenPy 7
+    ## where include_screenshot=False is not supported.
+    _TL_EMPTY_PNG = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00"
+        b"\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+
+    def _tl_save_no_screenshot(slot):
+        """Call renpy.save(slot) without including a screenshot.
+        RenPy 8+: include_screenshot=False kwarg.
+        RenPy 7:  temporarily shadow interface.get_screenshot with a 1×1 PNG."""
+        _renpy_major = getattr(renpy, "version_tuple", (7,))[0]
+        if _renpy_major >= 8:
+            renpy.save(slot, include_screenshot=False, mutate_flag=False)
+        else:
+            _iface = renpy.game.interface
+            try:
+                _iface.get_screenshot = lambda: _TL_EMPTY_PNG
+                renpy.save(slot)
+            finally:
+                try:
+                    del _iface.get_screenshot
+                except AttributeError:
+                    pass
+
+    ## Key under which the pre-save threading.Event is stored in sys.modules.
+    ## Using sys.modules keeps it out of the RenPy store and avoids pickle
+    ## failures on RenPy 7 (Python 2) where threading.Lock is not picklable.
+    def _tl_write_pre_save(node_index, context, ast_key=None):
+        """
+        Write a stripped pre-menu save synchronously on the main thread.
+
+        ast_key=(filename, linenumber) is included in the slot hash so that
+        sandbox games where different menus share the same (node_index,
+        context[:N]) prefix get distinct slot names and don't collide.
+
+        If autosave is in progress, the write is skipped — the next menu will
+        get a fresh save. Log is truncated to 1 entry for the duration of the
+        save call to keep files small, then restored in a finally block.
+        """
+        import os as _os
+
+        ## Fast path: slot already on disk for this exact (index, path, menu)
+        if _tl_find_pre_save(node_index, context, ast_key) is not None:
+            _tl_log("TL pre-save skip (exists): node={}".format(node_index))
+            return
+
+        ## Skip if autosave is running to avoid concurrent save conflict.
+        _autosave_evt = getattr(renpy.loadsave, "autosave_not_running", None)
+        if _autosave_evt is not None and not _autosave_evt.is_set():
+            _tl_log("TL pre-save skip (autosave): node={}".format(node_index))
+            return
+
+        _slot  = _tl_pre_save_slot(node_index, context, ast_key)
+        _log   = renpy.game.log
+        _saved = list(_log.log)
+
+        try:
+            _log.log = _saved[-1:] if _saved else []
+            _tl_save_no_screenshot(_slot)
+
+            _path = _os.path.join(renpy.config.savedir, _slot + "-LT1.save")
+            _size = _os.path.getsize(_path) if _os.path.exists(_path) else -1
+            _tl_log("TL pre-save: node={} slot={} entries={} size={}".format(
+                node_index, _slot, len(_saved), _size))
+
+        except Exception as _e:
+            _tl_log("TL pre-save error node={}: {} ({})".format(
+                node_index, _e, type(_e).__name__))
+        finally:
+            _log.log = _saved
 
     def _tl_chap_end_slot_name(label, context=None, after_index=None):
         """Return the save-slot name for a chapter-end checkpoint."""
@@ -25,26 +175,36 @@ init -2 python:
             return "_ch_chap_{}_{}".format(label, h6)
         return "_ch_chap_{}".format(label)
 
+    def _tl_chap_slot_exists(slot_name, save_dir=None):
+        """Return (exists, slot_name) — checks root savedir."""
+        import os as _os
+        _root = save_dir if save_dir is not None else renpy.config.savedir
+        for _ext in ("-LT1.save", ".save"):
+            if _os.path.exists(_os.path.join(_root, slot_name + _ext)):
+                return True, slot_name
+        return False, None
+
     def _tl_find_nearest_save(target_index, context, save_dir=None,
                                 start_exists=None, chap_candidates=None):
         """
         Find the chronology save slot with the highest index <= target_index
         that shares the same path prefix as context.
 
-        save_dir: directory to scan. Defaults to renpy.config.savedir.
-        start_exists: if True, fall back to _ch_start when no checkpoint found.
-                        If None, checks the filesystem.
-        chap_candidates: optional list of (after_index, slot_name) from chapter-end
-                        saves, pre-validated by the caller.
-        Returns slot name (without extension) or None.
+        start_exists: False = skip _ch_start fallback; None = check filesystem;
+            True = check filesystem, fall back to bare name if not found.
+        chap_candidates: optional list of (after_index, full_slot_name) from
+            chapter-end saves, pre-validated by the caller.
+        Returns slot name or None.
         """
         import os as _os
-        if save_dir is None:
-            save_dir = renpy.config.savedir
+
+        _root_dir = save_dir if save_dir is not None else renpy.config.savedir
+
         best_index = -1
         best_slot  = None
+
         try:
-            for fname in _os.listdir(save_dir):
+            for fname in _os.listdir(_root_dir):
                 if not fname.startswith("_ch_"):
                     continue
                 if "recovery" in fname or "start" in fname or "chap" in fname:
@@ -70,21 +230,21 @@ init -2 python:
                     best_index = idx
                     best_slot  = name
         except Exception as e:
-            _tl_log("TL find_nearest_save error: {}".format(e))
+            _tl_log("TL find_nearest_save scan error: {}".format(e))
 
         for chap_idx, chap_slot in (chap_candidates or []):
             if chap_idx <= target_index and chap_idx > best_index:
                 best_index = chap_idx
                 best_slot  = chap_slot
 
-        if best_slot is None:
-            if start_exists is None:
-                import os as _os2
-                start_file = _os2.path.join(save_dir, "_ch_start-LT1.save")
-                start_exists = _os2.path.exists(start_file)
-            if start_exists:
+        if best_slot is None and start_exists is not False:
+            _start = _os.path.join(_root_dir, "_ch_start-LT1.save")
+            if _os.path.exists(_start):
                 best_slot = "_ch_start"
                 _tl_log("TL find_nearest_save: using _ch_start fallback")
+            elif start_exists is True:
+                best_slot = "_ch_start"
+                _tl_log("TL find_nearest_save: using _ch_start fallback (caller-confirmed)")
 
         return best_slot
 
@@ -99,25 +259,20 @@ init -2 python:
 
     def _tl_begin_label_jump(label):
         try:
-            renpy.save("_ch_recovery")
+            _tl_save_no_screenshot("_ch_recovery")
             persistent._tl_recovery_slot = "_ch_recovery"
 
             ## Prefer loading the chapter-end save (captures all state cleanly)
-            import os as _os
             _marker = next((m for m in store._tl_chapter_markers if m["end_label"] == label), None)
             if _marker is not None:
                 _ai   = _marker["after_index"]
                 _slot = _tl_chap_end_slot_name(label, store._tl_context, _ai)
             else:
                 _slot = _tl_chap_end_slot_name(label)
-            _sd   = renpy.config.savedir
-            _exists = (
-                _os.path.exists(_os.path.join(_sd, "{}-LT1.save".format(_slot))) or
-                _os.path.exists(_os.path.join(_sd, "{}.save".format(_slot)))
-            )
+            _exists, _full_slot = _tl_chap_slot_exists(_slot)
             if _exists:
-                store._tl_chap_end_slot = _slot
-                _tl_log("TL chapter-end jump: loading save={}".format(_slot))
+                store._tl_chap_end_slot = _full_slot
+                _tl_log("TL chapter-end jump: loading save={}".format(_full_slot))
                 return
 
             ## Fallback (no save yet): jump + manual rollback
@@ -147,7 +302,7 @@ init -2 python:
     def _tl_begin_jump(node_index, option_index):
         try:
             _tl_log("TL jump: node={} option={}".format(node_index, option_index))
-            renpy.save("_ch_recovery")
+            _tl_save_no_screenshot("_ch_recovery")
             persistent._tl_recovery_slot = "_ch_recovery"
 
             persistent._tl_replay_path = [
@@ -176,7 +331,7 @@ init -2 python:
             ## Shadow path must survive the checkpoint load that follows, so stage it in
             ## persistent. _tl_on_load transfers it into store._tl_shadow_path after load
             ## (store vars would be overwritten by the checkpoint). Recovery save is taken
-            ## above before this line, so cancel restores store._tl_shadow_path cleanly.            
+            ## above before this line, so cancel restores store._tl_shadow_path cleanly.
             persistent._tl_pending_shadow_path = _shadow_path
 
             renpy.save_persistent()
@@ -185,18 +340,34 @@ init -2 python:
             ## Build chapter-end save candidates: markers before target, hash-validated,
             ## existing on disk. Passed to _tl_find_nearest_save so chapter-end saves
             ## can serve as jump checkpoints when closer than a regular checkpoint.
-            import os as _os
-            _sd = renpy.config.savedir
             _chap_candidates = []
             for _m in store._tl_chapter_markers:
                 _ai = _m["after_index"]
                 if _ai > node_index - 1:
                     continue
                 _cs = _tl_chap_end_slot_name(_m["end_label"], store._tl_context, _ai)
-                if (_os.path.exists(_os.path.join(_sd, "{}-LT1.save".format(_cs))) or
-                        _os.path.exists(_os.path.join(_sd, "{}.save".format(_cs)))):
-                    _chap_candidates.append((_ai, _cs))
+                _exists, _full_cs = _tl_chap_slot_exists(_cs)
+                if _exists:
+                    _chap_candidates.append((_ai, _full_cs))
 
+            ## Tier 1: exact pre-save at target — zero skip
+            _target_hist = next((n for n in _tl_history if n["index"] == node_index), None)
+            _target_ast_key = _tl_derive_node_menu_site_key(_target_hist) if _target_hist else None
+            _pre = _tl_find_pre_save(node_index, list(_tl_context), _target_ast_key)
+            if _pre is not None:
+                _tl_log("TL jump: pre-save found={}".format(_pre))
+                store._tl_load_slot = _pre
+                return "load"
+
+            ## Tier 2: nearest earlier pre-save — skip replay from that menu
+            _nearest_pre = _tl_find_nearest_pre_save(
+                node_index - 1, list(_tl_context), list(_tl_history))
+            if _nearest_pre is not None:
+                _tl_log("TL jump: nearest pre-save found={}".format(_nearest_pre))
+                store._tl_load_slot = _nearest_pre
+                return "load"
+
+            ## Tier 3: nearest _ch_* post-choice save + skip replay
             nearest = _tl_find_nearest_save(
                 node_index - 1, list(_tl_context), chap_candidates=_chap_candidates)
 
@@ -215,20 +386,261 @@ init -2 python:
             _tl_clear_replay_state()
             return None
 
+    ## ── Experimental: pre-save thinning (console-only) ──────────────────────
+
+    _TL_BLOCK_PY = ("renpy.pause(", "renpy.input(", "renpy.call_screen(", "ui.interact(")
+    _TL_BLOCK_US = ("imagemap", "call screen")
+
+    def _tl_read_pre_save_roots(slot_name, save_dir=None):
+        """
+        Read store var snapshot from a pre-save file without loading it.
+        Opens the ZIP, reads the 'log' entry, unpickles with renpy.compat.pickle.loads,
+        returns the roots dict. Never calls log.unfreeze() — current game state untouched.
+        Returns None on any error.
+        """
+        import zipfile as _zf
+        import os as _os
+        from renpy.compat.pickle import loads as _loads
+        _root = save_dir if save_dir is not None else renpy.config.savedir
+        for _ext in ("-LT1.save", ".save"):
+            _path = _os.path.join(_root, slot_name + _ext)
+            if _os.path.exists(_path):
+                try:
+                    with _zf.ZipFile(_path, "r") as _z:
+                        _log_data = _z.read("log")
+                    _roots, _ = _loads(_log_data)
+                    return _roots
+                except Exception as _e:
+                    _tl_log("TL read_pre_save_roots error {}: {}".format(slot_name, _e))
+                    return None
+        return None
+
+    def _tl_path_has_danger(start_block, roots, label_map, danger_labels):
+        """
+        Walk forward from a menu option's block, following Jump/Call targets.
+        Evaluates If conditions deterministically against roots; conservative fallback
+        (follow all branches) when eval fails.
+        Returns True if a danger label is reached before any Menu node, else False.
+        """
+        _work = [start_block]
+        _visited_labels = set()
+        while _work:
+            _block = _work.pop()
+            for _node in (_block or []):
+                _nt = type(_node).__name__
+                if _nt == "Menu":
+                    return False
+                elif _nt in ("Jump", "Call"):
+                    _target = getattr(_node, "target", None)
+                    if _target in danger_labels:
+                        return True
+                    if _target and _target not in _visited_labels and _target in label_map:
+                        _visited_labels.add(_target)
+                        _work.append(label_map[_target])
+                elif _nt == "If":
+                    _followed = False
+                    for _cond, _eb in (getattr(_node, "entries", None) or []):
+                        _cond_str = str(_cond)
+                        if _cond_str in ("True", "else"):
+                            if _eb:
+                                _work.append(_eb)
+                            _followed = True
+                            break
+                        try:
+                            _taken = eval(_cond_str, {}, roots)  ## deterministic
+                        except Exception:
+                            _taken = True  ## conservative: follow this branch
+                        if _taken:
+                            if _eb:
+                                _work.append(_eb)
+                            _followed = True
+                            break
+                    ## if nothing matched, do nothing (branch not taken)
+        return False
+
+    def _tl_thin_pre_saves(keep_every=5, dry_run=True, save_dir=None):
+        """
+        Experimental cleanup: determine which pre-saves are essential for jump replay
+        and delete the rest. Console-only — never called automatically.
+
+        Essential = menu N where the AST path between menu N-1's chosen option
+        and menu N passes through a blocking interaction (pause, input, call_screen,
+        imagemap) that cannot be skip-replayed. Deleting that pre-save would break
+        jump replay to menu N.
+
+        False negatives (deleted essential save) = NOT OK.
+        False positives (kept non-essential save) = OK — just wastes space.
+
+        keep_every: of non-essential saves, keep every Nth (by node index)
+        dry_run: if True, only log — don't delete anything.
+        Returns (keep_list, delete_list).
+        """
+        import os as _os
+
+        _root = save_dir if save_dir is not None else renpy.config.savedir
+        _nodes = list(renpy.game.script.namemap.values())
+
+        ## ── Build danger_labels: label names that contain blocking patterns ──
+        _danger_labels = set()
+        def _dv(_node, _state, _cur_label):
+            _nt = type(_node).__name__
+            if _nt == "Python":
+                _src = getattr(getattr(_node, "code", None), "source", None) or ""
+                if any(_p in _src for _p in _TL_BLOCK_PY):
+                    _danger_labels.add(_cur_label)
+            elif _nt == "UserStatement":
+                _line = str(getattr(_node, "line", "") or "")
+                if any(_line.startswith(_k) for _k in _TL_BLOCK_US):
+                    _danger_labels.add(_cur_label)
+            return _state
+
+        _tl_walk_ast_blocks(_nodes, _dv)
+        _tl_log("TL thin_pre_saves: {} danger labels".format(len(_danger_labels)))
+
+        ## ── Live menu lookup (keyed by normalized (file, line)) ──
+        _live_lookup = _tl_live_menu_lookup()
+
+        ## ── Build label_map: label_name -> block ──
+        _label_map = {}
+        for _ln in _nodes:
+            if type(_ln).__name__ != "Label":
+                continue
+            _lb = getattr(_ln, "block", None)
+            if _lb is not None:
+                _label_map[_ln.name] = _lb
+
+        ## ── Scan savedir for _pre_* slots ──
+        _pre_slots = {}  ## {slot_name: node_index}
+        try:
+            for _fname in _os.listdir(_root):
+                if not _fname.startswith("_pre_"):
+                    continue
+                _name  = _fname.replace("-LT1.save", "").replace(".save", "")
+                if _name in _pre_slots:
+                    continue
+                _parts = _name.split("_")
+                ## ['', 'pre', '0027', 'hash']
+                if len(_parts) < 4:
+                    continue
+                try:
+                    _idx = int(_parts[2])
+                except ValueError:
+                    continue
+                _pre_slots[_name] = _idx
+        except Exception as _e:
+            _tl_log("TL thin_pre_saves scan error: {}".format(_e))
+            return [], []
+
+        if not _pre_slots:
+            _tl_log("TL thin_pre_saves: no pre-saves found")
+            return [], []
+
+        _tl_log("TL thin_pre_saves: {} pre-saves found".format(len(_pre_slots)))
+
+        ## ── Determine essential saves ──
+        ## For each pre-save at index N: read its own history. history[-1] is
+        ## the preceding menu node (the last choice made before this save point).
+        ## If the chosen option's AST block contains a blocking interaction before
+        ## reaching any Menu node, this pre-save is essential for jump replay.
+        _essential = set()
+
+        for _slot, _idx in _pre_slots.items():
+            _roots = _tl_read_pre_save_roots(_slot, _root)
+            if _roots is None:
+                ## Cannot read roots — conservative: keep
+                _essential.add(_slot)
+                continue
+
+            ## RenPy stores store vars as "store.varname" in the roots dict
+            _history = _roots.get("store._tl_history") or []
+            if not _history:
+                ## No preceding menu recorded — skip (cannot determine danger)
+                continue
+
+            ## The last entry is the menu immediately before this save point
+            _preceding = _history[-1]
+            _menu_key  = _tl_derive_node_menu_site_key(_preceding)
+            _menu_node = _live_lookup.get(_menu_key) if _menu_key else None
+
+            if _menu_node is None:
+                _tl_log("TL thin: no menu node for slot={} key={}, marking essential".format(
+                    _slot, _menu_key))
+                _essential.add(_slot)
+                continue
+
+            ## Find the chosen option block by matching label (not by items index,
+            ## because menu.items includes prompt/locked entries absent from options)
+            _chosen_index = _preceding.get("chosen_index")
+            _options      = _preceding.get("options") or []
+            if _chosen_index is None or _chosen_index >= len(_options):
+                _essential.add(_slot)
+                continue
+
+            _chosen_label = _options[_chosen_index]
+            _block = None
+            for _item in (getattr(_menu_node, "items", None) or []):
+                if isinstance(_item, (list, tuple)) and len(_item) > 2:
+                    if _item[0] == _chosen_label:
+                        _block = _item[2]
+                        break
+
+            if _block is None:
+                ## Label not found in AST items — conservative
+                _essential.add(_slot)
+                continue
+
+            if _tl_path_has_danger(_block, _roots, _label_map, _danger_labels):
+                _tl_log("TL thin: idx={} slot={} essential (danger after preceding menu)".format(
+                    _idx, _slot))
+                _essential.add(_slot)
+
+                ## ── Build keep/delete lists ──
+        _keep   = []
+        _delete = []
+
+        for _slot, _idx in sorted(_pre_slots.items(), key=lambda x: x[1]):
+            if _slot in _essential:
+                _keep.append(_slot)
+                _tl_log("TL thin: keep {} (essential)".format(_slot))
+            elif _idx % keep_every == 0:
+                _keep.append(_slot)
+                _tl_log("TL thin: keep {} (periodic {})".format(_slot, keep_every))
+            else:
+                _delete.append(_slot)
+                _tl_log("TL thin: delete {}".format(_slot))
+
+        _tl_log("TL thin_pre_saves: keep={} delete={} dry_run={}".format(
+            len(_keep), len(_delete), dry_run))
+
+        if not dry_run:
+            for _slot in _delete:
+                for _ext in ("-LT1.save", ".save"):
+                    _path = _os.path.join(_root, _slot + _ext)
+                    if _os.path.exists(_path):
+                        try:
+                            _os.remove(_path)
+                            _tl_log("TL thin: removed {}".format(_path))
+                        except Exception as _e:
+                            _tl_log("TL thin: remove error {}: {}".format(_path, _e))
+
+        return _keep, _delete
+
+    ## ── End experimental ─────────────────────────────────────────────────────
+
     def _tl_cancel_replay():
         slot = persistent._tl_recovery_slot
         ## Snapshot all current node thumbnails into cache before loading
         ## the recovery save. After load, _tl_history will be restored from
         ## the save state — but the cache persists, so thumbnails are available.
         try:
+            _tl_tc = getattr(renpy.game, "_tl_thumb_cache", {})
             for n in _tl_history:
                 key = str(n.get("ast_key")) if n.get("ast_key") else None
-                if key and n.get("thumb_bytes") and key not in persistent._tl_thumb_cache:
-                    persistent._tl_thumb_cache[key] = n["thumb_bytes"]
-                    n["thumb_bytes"] = None  ## cleared — served from persistent cache
-                    while len(persistent._tl_thumb_cache) > TL_THUMB_CACHE_MAX:
-                        persistent._tl_thumb_cache.pop(next(iter(persistent._tl_thumb_cache)))
-            renpy.save_persistent()
+                if key and n.get("thumb_bytes") and key not in _tl_tc:
+                    _tl_tc[key] = n["thumb_bytes"]
+                    n["thumb_bytes"] = None  ## cleared — served from cache
+                    while len(_tl_tc) > TL_THUMB_CACHE_MAX:
+                        _tl_tc.pop(next(iter(_tl_tc)))
         except Exception as e:
             _tl_log("TL cancel_replay cache error: {}".format(e))
         _tl_clear_replay_state()  ## clears _tl_recovery_slot

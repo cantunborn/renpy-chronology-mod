@@ -2,7 +2,7 @@
 ## Ghost branch card — one branch of an If node.
 ## =============================================================================
 
-screen tl_ghost_card(ghost, bi, cw, th, hl):
+screen tl_ghost_card(ghost, bi, cw, th):
 
     python:
         _gbc_taken  = (bi == ghost.get("taken_index"))
@@ -26,17 +26,15 @@ screen tl_ghost_card(ghost, bi, cw, th, hl):
             img_disp=_gbc_img_disp,
             locked=_gbc_locked,
             taken=_gbc_taken,
-            highlighted=hl,
+            highlighted=False,
         )
 
-        ## Bottom bar: condition label (clickable)
-        button:
+        ## Bottom bar: condition label
+        frame:
             style "tl_frame_base"
             xsize cw
             padding (12, 8, 12, 8)
-            background Solid(TL["hover_bg"] if hl else "#00000044")
-            hover_background Solid(TL["hover_bg"])
-            action Function(_tl_toggle_ghost_highlight, ghost["ast_key"], bi)
+            background Solid("#00000044")
 
             text _gbc_cond:
                 style "tl_base"
@@ -51,7 +49,7 @@ screen tl_ghost_card(ghost, bi, cw, th, hl):
 ## Ghost branch rows — rendered below the main timeline cards.
 ## =============================================================================
 
-screen tl_ghost_rows(ghost_nodes, ghost_highlight, card_w, cols, spacing, reverse_clusters=False):
+screen tl_ghost_rows(ghost_nodes, card_w, cols, spacing, reverse_clusters=False):
     if ghost_nodes:
         vbox:
             spacing spacing
@@ -124,10 +122,7 @@ screen tl_ghost_rows(ghost_nodes, ghost_highlight, card_w, cols, spacing, revers
                                         ysize _tl_gbc_th + 42
                                         background Solid(TL["accent"] + "2a")
 
-                            python:
-                                _gbc_hl = (ghost_highlight == (_gbc_ghost["ast_key"], _gbc_bi))
-
-                            use tl_ghost_card(_gbc_ghost, _gbc_bi, card_w, _tl_gbc_th, _gbc_hl)
+                            use tl_ghost_card(_gbc_ghost, _gbc_bi, card_w, _tl_gbc_th)
 
                         python:
                             _gbc_pad = cols - len(_tl_gbc_row)

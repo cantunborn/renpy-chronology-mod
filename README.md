@@ -88,7 +88,7 @@ When a story variable changes mid-scene, a separate toast shows what changed —
 ### Save Compatibility
 
 - **Installing mid-playthrough:** the mod starts recording from that point. Earlier choices show no history, which is expected.
-- **Removing the mod:** existing saves load normally. Ren'Py ignores the unused `_tl_*` variables.
+- **Removing the mod:** existing saves load normally. Ren'Py ignores the unused `_tl_*` variables. A `_tl_thumbs.pkl` file in the save directory can be deleted manually — it is only used by the mod.
 - **Loading a corrupted save:** history is validated and any malformed entries are dropped silently.
 
 ---

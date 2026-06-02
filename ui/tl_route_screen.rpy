@@ -39,15 +39,16 @@ screen tl_route(tl_route_expanded, tl_route_hover):
     key "rollback"   action NullAction()
     key "rollforward" action NullAction()
 
+    default _tl_route_chips = _tl_build_route_chips()
+
     python:
-        _tl_route_chips = _tl_build_route_chips()
         _tl_chip_h      = 36
         _tl_chip_gap    = 10
         _TL_ROUTE_FOLD  = 24
         _tl_side_pad    = 40
         _tl_avail       = config.screen_width - (_tl_side_pad * 2)
         _tl_chip_est    = 300   ## estimated chip width for column calc
-        _tl_chips_per_row = max(1, (_tl_avail + _tl_chip_gap) // (_tl_chip_est + _tl_chip_gap))
+        _tl_chips_per_row = _TL_MAX(1, (_tl_avail + _tl_chip_gap) // (_tl_chip_est + _tl_chip_gap))
         _tl_chip_w      = (_tl_avail - _tl_chip_gap * (_tl_chips_per_row - 1)) // _tl_chips_per_row
         _tl_key_w       = _tl_chip_w * 55 // 100
         _tl_val_w       = _tl_chip_w - _tl_key_w
@@ -55,11 +56,11 @@ screen tl_route(tl_route_expanded, tl_route_hover):
         for _g in (_tl_ghost_nodes or []):
             _tl_ghost_vars.update(_g.get("affecting_vars") or [])
         _tl_highlighted = _tl_ghost_vars | (getattr(store, "_tl_recently_changed_vars", None) or set())
-        _tl_hl_count    = sum(1 for _n, _v in _tl_route_chips if _n in _tl_highlighted)
-        _tl_hl_rows     = max(3, -(-_tl_hl_count // _tl_chips_per_row)) if _tl_chips_per_row else 3
+        _tl_hl_count    = len([1 for _n, _v in _tl_route_chips if _n in _tl_highlighted])
+        _tl_hl_rows     = _TL_MAX(3, -(-_tl_hl_count // _tl_chips_per_row)) if _tl_chips_per_row else 3
         _TL_ROUTE_FOLD  = _tl_hl_rows * _tl_chips_per_row
         _tl_card_spacing = 16
-        _tl_max_cols = max(1, (_tl_avail + _tl_card_spacing) // (160 + _tl_card_spacing))
+        _tl_max_cols = _TL_MAX(1, (_tl_avail + _tl_card_spacing) // (160 + _tl_card_spacing))
         _tl_card_cols = _tl_max_cols if _tl_max_cols < 5 else 5
         _tl_card_w   = (_tl_avail - _tl_card_spacing * (_tl_card_cols - 1)) // _tl_card_cols
 
@@ -118,7 +119,7 @@ screen tl_route(tl_route_expanded, tl_route_hover):
                             for _chip_name, _chip_val in _crow:
                                 python:
                                     _chip_key_label = _tl_prettify_var(_chip_name)
-                                    _chip_val_label = str(_chip_val)
+                                    _chip_val_label = _tl_strip_renpy_tags(str(_chip_val))
                                     _chip_key_bg    = (TL["accent"] + "44") if _chip_name in _tl_highlighted else TL["btn_hover_bg"]
 
                                 button:
@@ -202,7 +203,7 @@ screen tl_route(tl_route_expanded, tl_route_hover):
                         ysize 24
 
                     ## ── Ghost cards ───────────────────────────────────────────
-                    use tl_ghost_rows(_tl_ghost_nodes, _tl_ghost_highlight, _tl_card_w, _tl_card_cols, _tl_card_spacing, True)
+                    use tl_ghost_rows(_tl_ghost_nodes, _tl_card_w, _tl_card_cols, _tl_card_spacing, True)
 
                     frame:
                         background None
