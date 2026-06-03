@@ -151,7 +151,8 @@ init -1 python:
                 node["img_name"] = _img_cache[_ak]
             elif _lk and _lk in _img_cache:
                 node["img_name"] = _img_cache[_lk]
-        _tl_log("TL img_name: ast_key={} img_name={}".format(ast_key, node["img_name"]))
+        if TL_DEBUG_MENU:
+            _tl_log("TL img_name: ast_key={} img_name={}".format(ast_key, node["img_name"]))
 
         ## Screenshot fallback: explicit migration/backstop path only.
         _tl_need_frozen_thumb = bool(node["img_name"] and _tl_img_name_is_movie(node["img_name"]))
@@ -171,7 +172,7 @@ init -1 python:
                         node["thumb_bytes"] = thumb
                 elif thumb:
                     node["thumb_bytes"] = thumb
-            if _tl_need_frozen_thumb:
+            if _tl_need_frozen_thumb and TL_DEBUG_MENU:
                 _tl_log("TL movie thumb fallback: ast_key={} img_name={}".format(ast_key, node["img_name"]))
 
 

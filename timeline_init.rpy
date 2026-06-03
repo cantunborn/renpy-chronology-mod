@@ -33,9 +33,11 @@ init -2 python:
     TL_SAVE_EVERY       = 10   ## write a checkpoint save every N choices
     TL_DENSE_SAVES      = 5    ## save every choice for the first N nodes
     TL_THUMB_CACHE_MAX  = 500  ## max thumbnails (~25MB at ~50KB/thumb)
-    TL_DEBUG_GHOST      = False   ## ghost synthesis detail (if-execute, clustering, branch-img)
+    TL_DEBUG_GHOST      = False   ## ghost synthesis detail (if-execute, clustering, branch-img, image resolution)
     TL_DEBUG_SEEN       = False   ## seen-state resolution detail (opt_seen, peek_seen)
-    TL_DEBUG_ROUTE      = False   ## route tracker detail (var diff per Python block)
+    TL_DEBUG_ROUTE      = False   ## route tracker detail (var diff per Python block, default walk detail)
+    TL_DEBUG_MENU       = False   ## per-menu pipeline detail (menu enter, img_name, shadow path consumption)
+    TL_DEBUG_ASSET      = False   ## thumbnail cache detail (hit/generated, scene map updates)
 
     def _tl_runtime_cache_store():
         """
@@ -115,6 +117,12 @@ init python:
     if not hasattr(persistent, "_tl_var_notifs_enabled") or persistent._tl_var_notifs_enabled is None:
         persistent._tl_var_notifs_enabled = False
 
+    if not hasattr(persistent, "_tl_asset_thumb_dirty"):
+        persistent._tl_asset_thumb_dirty = False
+
+    if not hasattr(persistent, "_tl_ghost_node_cache") or persistent._tl_ghost_node_cache is None:
+        persistent._tl_ghost_node_cache = {}
+
     if persistent._tl_scene_map_version is None or persistent._tl_scene_map_version < 3:
         persistent._tl_menu_scene_map = {}
         persistent._tl_scene_map_version = 3
@@ -133,14 +141,24 @@ init python:
         if _os.path.exists(_tl_thumbs_path):
             try:
                 with _gz.open(_tl_thumbs_path, "rb") as _f:
-                    _d = _pl(_f.read())
-            except _gz.BadGzipFile:
-                ## Legacy uncompressed file — read once, rewrite compressed at quit.
-                with open(_tl_thumbs_path, "rb") as _f:
-                    _d = _pl(_f.read())
+                    _raw = _f.read()
+                _d = _pl(_raw)
+                _tl_log("TL thumbs loaded (gzip): thumb={} asset={}".format(
+                    len(_d.get("thumb", {})), len(_d.get("asset_thumb", {}))))
+            except Exception as _gz_e:
+                _tl_log("TL thumbs gzip load error: {} — trying raw".format(_gz_e))
+                try:
+                    with open(_tl_thumbs_path, "rb") as _f:
+                        _d = _pl(_f.read())
+                    _tl_log("TL thumbs loaded (raw): thumb={} asset={}".format(
+                        len(_d.get("thumb", {})), len(_d.get("asset_thumb", {}))))
+                except Exception as _raw_e:
+                    _tl_log("TL thumbs raw load error: {}".format(_raw_e))
+                    _d = {}
             renpy.game._tl_thumb_cache      = _d.get("thumb", {})
             renpy.game._tl_asset_thumb_cache = _d.get("asset_thumb", {})
         else:
+            _tl_log("TL thumbs init: no pkl file — starting empty")
             renpy.game._tl_thumb_cache      = {}
             renpy.game._tl_asset_thumb_cache = {}
     except Exception as _e:
@@ -150,26 +168,40 @@ init python:
 
     ## One-time migration: drain any existing persistent caches into renpy.game.
     ## After this run persistent._tl_thumb_cache / _tl_asset_thumb_cache stay empty.
-    if getattr(persistent, "_tl_thumb_cache", None):
+    _mig_thumb  = len(getattr(persistent, "_tl_thumb_cache", None) or {})
+    _mig_asset  = len(getattr(persistent, "_tl_asset_thumb_cache", None) or {})
+    if _mig_thumb:
         renpy.game._tl_thumb_cache.update(persistent._tl_thumb_cache)
         persistent._tl_thumb_cache = {}
-    if getattr(persistent, "_tl_asset_thumb_cache", None):
+    if _mig_asset:
         renpy.game._tl_asset_thumb_cache.update(persistent._tl_asset_thumb_cache)
         persistent._tl_asset_thumb_cache = {}
+    if _mig_thumb or _mig_asset:
+        _tl_log("TL thumbs migration: moved thumb={} asset={} from persistent".format(
+            _mig_thumb, _mig_asset))
 
     def _tl_save_thumbs():
         import os as _os, gzip as _gz
+        _tc  = getattr(renpy.game, "_tl_thumb_cache", None)
+        _atc = getattr(renpy.game, "_tl_asset_thumb_cache", None)
+        _dirty = getattr(persistent, "_tl_asset_thumb_dirty", False)
+        _has_replay_thumbs = bool(_tc)
+        if not _dirty and not _has_replay_thumbs:
+            _tl_log("TL thumbs save skipped: cache unchanged")
+            return
         try:
             from renpy.compat.pickle import dumps as _pd
             _d = {
-                "thumb":       getattr(renpy.game, "_tl_thumb_cache", {}),
-                "asset_thumb": getattr(renpy.game, "_tl_asset_thumb_cache", {}),
+                "thumb":       _tc or {},
+                "asset_thumb": _atc or {},
             }
             _path = _os.path.join(renpy.config.savedir, "_tl_thumbs.pkl")
-            with _gz.open(_path, "wb") as _f:
+            with _gz.open(_path, "wb", compresslevel=1) as _f:
                 _f.write(_pd(_d))
             _tl_log("TL thumbs saved: thumb={} asset={}".format(
                 len(_d["thumb"]), len(_d["asset_thumb"])))
+            persistent._tl_asset_thumb_dirty = False
+            renpy.save_persistent()
         except Exception as _e:
             _tl_log("TL thumbs save error: {}".format(_e))
 

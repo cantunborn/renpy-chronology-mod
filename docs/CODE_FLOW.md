@@ -25,6 +25,8 @@ Chapter-end persistence hangs off the same runtime layer. `_tl_chapter_label_cb(
 - `TL_DEBUG_GHOST` — ghost synthesis detail (if-execute, clustering, branch-img tiers); gates ~12 high-volume logs in `tl_ghost_logic.rpy`
 - `TL_DEBUG_SEEN` — seen-state resolution detail (opt_seen, peek_seen); gates per-option logs that fire O(options × cards) per timeline open
 - `TL_DEBUG_ROUTE` — route tracker detail (var diff per Python block, chip filter stats)
+- `TL_DEBUG_MENU` — per-menu pipeline detail (img_name resolution, thumbnail fallback)
+- `TL_DEBUG_ASSET` — thumbnail cache detail (hit/generated, scene map backfill, ast-walk misses)
 
 `timeline_save_hooks.rpy` validates and repairs loaded state, cleans transient UI state, and keeps older saves compatible.
 
@@ -225,12 +227,7 @@ At `If.execute` time:
 
 Ghost synthesis does not just append one card per executed `if`. The hook now collects the full sequential sibling `If` run starting at the current AST node, builds one payload per sibling `if`, partitions the run into mutually exclusive groups, emits one ghost cluster per group, and records later sibling keys in `_tl_skip_ghost_ifs` so runtime does not append duplicates when those siblings execute later.
 
-Each payload includes:
-
-- condition strings
-- taken branch index
-- first branch image
-- scene-based seen descriptors
+Each slim dict in `_tl_ghost_nodes` contains only the 4 runtime fields: `ast_key`, `taken_index`, `branch_imgs`, `cluster_with_prev`. AST-derived data (`conditions`, `seen_fns`, `affecting_vars`, `_regions`) is written once to `persistent._tl_ghost_node_cache[str(ast_key)]` and read back via `_tl_ghost_ast(ast_key)`. This keeps rollback-tracked store state small (O(1) per cluster vs. O(N²) log growth with full dicts).
 
 Rendering happens in `ui/tl_ghost_cards.rpy`. The UI flattens each cluster into branch rows. Taken branches show `→`. Untaken unseen branches get a dark overlay and lock icon. Untaken previously seen branches get a lighter semi-transparent overlay; no lock.
 

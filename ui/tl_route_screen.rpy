@@ -54,7 +54,7 @@ screen tl_route(tl_route_expanded, tl_route_hover):
         _tl_val_w       = _tl_chip_w - _tl_key_w
         _tl_ghost_vars  = set()
         for _g in (_tl_ghost_nodes or []):
-            _tl_ghost_vars.update(_g.get("affecting_vars") or [])
+            _tl_ghost_vars.update(_tl_ghost_ast(_g["ast_key"]).get("affecting_vars") or _g.get("affecting_vars") or [])
         _tl_highlighted = _tl_ghost_vars | (getattr(store, "_tl_recently_changed_vars", None) or set())
         _tl_hl_count    = len([1 for _n, _v in _tl_route_chips if _n in _tl_highlighted])
         _tl_hl_rows     = _TL_MAX(3, -(-_tl_hl_count // _tl_chips_per_row)) if _tl_chips_per_row else 3

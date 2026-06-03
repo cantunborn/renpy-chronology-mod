@@ -122,8 +122,14 @@ Asset/thumbnail resolution, image caching, and displayable creation.
 Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` to track branch conditions at runtime. Route var change detection (`Python.execute` patch) lives in `tl_route_logic.rpy`.
 
 **Store variables (transient):**
-- `_tl_ghost_nodes` — list of ghost card dicts built during gameplay
+- `_tl_ghost_nodes` — list of slim ghost cluster dicts; each has only 4 runtime fields: `ast_key`, `taken_index`, `branch_imgs`, `cluster_with_prev`
 - `_tl_skip_ghost_ifs` — set of ast_keys; If nodes whose sibling rows are already emitted
+
+**Persistent cache:**
+- `persistent._tl_ghost_node_cache` — `{str(ast_key): {conditions, seen_fns, affecting_vars, _regions}}`; AST-derived ghost fields written once per cluster; keyed by `str(ast_key)` tuple. Invalidated only when stored `conditions` differ from current AST (i.e. game script changed that If node). Use `_tl_ghost_ast(ast_key)` to read.
+
+**Module-level cache:**
+- `_TL_SEEN_FN_CACHE` — `{id(branch_block): seen_fn_descriptor}`; memoizes `_tl_make_seen_fn` per AST branch block object. Keyed by `id()` which is stable for the session lifetime. Not persisted; not rolled back.
 
 **Constants:**
 - `_TL_KW_SKIP` — set of Python keyword strings to skip during condition prettification
@@ -133,6 +139,8 @@ Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` to track branch cond
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
+| `_tl_ghost_ast` | `(ast_key) → dict` | Returns `persistent._tl_ghost_node_cache[str(ast_key)]` or `{}`. All UI read sites use `_tl_ghost_ast(key).get(field) or ghost.get(field)` for backward compat with old saves. |
+| `_tl_make_seen_fn_cached` | `(block) → tuple` | Cached wrapper for `_tl_make_seen_fn`; keyed by `id(block)`. Returns cached descriptor on hit; builds and stores on miss. |
 | `_tl_branch_img` | `(block, context_img=None) → str or None` | Resolves the best thumbnail image for a ghost branch using 3-tier search: local Scene/Show, Jump/Call follow, context fallback. |
 | `_tl_first_scene_img` | `(block) → str or None` | Shim calling `_tl_branch_img(block, context_img=None)`. |
 | `_collect_branch_imgs` | `(block, max_images=5) → (list, set)` | Collects up to max_images Scene/Show images from a branch block with flat scan and one Jump/Call hop; returns `(images, visited_labels)`. |
@@ -147,7 +155,7 @@ Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` to track branch cond
 | `_tl_resolve_cluster_imgs` | `(if_node, context_img) → list` | Resolves per-branch thumbnail images for one If node using cross-branch comparison. |
 | `_tl_collect_if_run` | `(start_if_node) → list` | Collects a sequential run of player-relevant sibling If nodes with payload building. |
 | `_tl_partition_if_run` | `(run) → list` | Partitions a sequential If run into mutually-exclusive cluster groups. |
-| `_tl_emit_ghost_cluster` | `(group, cluster_with_prev) → None` | Emits one ghost card object from a clustered group of If payloads into `_tl_ghost_nodes`. |
+| `_tl_emit_ghost_cluster` | `(group, cluster_with_prev) → None` | Emits one ghost cluster: writes AST-derived fields to `persistent._tl_ghost_node_cache` (with invalidation check), then appends a slim dict with only the 4 runtime fields to `store._tl_ghost_nodes`. |
 | `_tl_on_if_execute` | `(if_node, taken_index, pre_taken_seen=None) → None` | Callback after If.execute; orchestrates ghost synthesis, visited-node marking, and branch notification via `_tl_notify_branch`. |
 | `_tl_should_track_if_node` | `(if_node) → bool` | Returns True if the If node is from a game script: filename is non-empty, does not start with `renpy/` (RenPy internals), does not contain `renpy-chronology-mod`, and is not a `timeline_*.rpy` mod file. |
 | `_tl_if_execute_patched` | `(self) → None` | Replacement for `renpy.ast.If.execute`; evaluates taken branch descriptor **before** executing (pre-execute snapshot) and calls `_tl_on_if_execute`. |

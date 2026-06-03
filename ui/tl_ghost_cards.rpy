@@ -5,8 +5,9 @@
 screen tl_ghost_card(ghost, bi, cw, th):
 
     python:
+        _gbc_ast    = _tl_ghost_ast(ghost["ast_key"])
         _gbc_taken  = (bi == ghost.get("taken_index"))
-        _gbc_sfns   = ghost.get("seen_fns") or []
+        _gbc_sfns   = _gbc_ast.get("seen_fns") or ghost.get("seen_fns") or []
         _gbc_sfn    = _gbc_sfns[bi] if bi < len(_gbc_sfns) else None
         _gbc_eval   = _tl_eval_seen_fn(_gbc_sfn) if _gbc_sfn else False
         _gbc_seen   = _gbc_taken or _gbc_eval
@@ -16,7 +17,7 @@ screen tl_ghost_card(ghost, bi, cw, th):
         _gbc_img_disp = Transform(
             _gbc_img, xsize=cw, ysize=th, fit="cover",
         ) if _gbc_img else None
-        _gbc_cond   = _tl_prettify_condition(ghost["conditions"][bi])
+        _gbc_cond   = _tl_prettify_condition((_gbc_ast.get("conditions") or ghost.get("conditions") or ["?"])[bi])
 
     vbox:
         xsize cw
@@ -83,7 +84,7 @@ screen tl_ghost_rows(ghost_nodes, card_w, cols, spacing, reverse_clusters=False)
                         _gbc_gi > 0 and
                         not _gbc_g.get("cluster_with_prev", False)
                     )
-                    for _gbc_bi in range(len(_gbc_g["conditions"])):
+                    for _gbc_bi in range(len(_tl_ghost_ast(_gbc_g["ast_key"]).get("conditions") or _gbc_g.get("conditions") or [])):
                         _tl_gbc_flat.append((
                             _gbc_g, _gbc_bi,
                             _gbc_cluster_sep and _gbc_bi == 0

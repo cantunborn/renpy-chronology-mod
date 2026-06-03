@@ -71,6 +71,25 @@ init python:
     import renpy.ast as _tl_renpy_ast
     _tl_orig_if_execute = _tl_renpy_ast.If.execute
 
+    ## seen_fn descriptor cache: _tl_builtin_id(branch_block) → seen_fn tuple.
+    ## Branch block objects are stable Python objects for the session lifetime
+    ## (RenPy AST is built once at startup and never replaced). Module-level dict
+    ## is invisible to the rollback system — correct, since AST doesn't change on
+    ## rollback. Not persistent — descriptors are session-derived from AST.
+    _TL_SEEN_FN_CACHE = {}
+
+    def _tl_ghost_ast(ast_key):
+        """Return persistent AST-derived data for a ghost cluster by its ast_key."""
+        return (persistent._tl_ghost_node_cache or {}).get(str(ast_key)) or {}
+
+    def _tl_make_seen_fn_cached(_blk):
+        if _blk is None:
+            return ("never",)
+        _key = _tl_builtin_id(_blk)
+        if _key not in _TL_SEEN_FN_CACHE:
+            _TL_SEEN_FN_CACHE[_key] = _tl_make_seen_fn(_blk)
+        return _TL_SEEN_FN_CACHE[_key]
+
     ## ── Var / condition helpers (restored from deleted tl_var_delta.rpy) ─────
 
     import re as _tl_re
@@ -176,7 +195,7 @@ init python:
         has non-overlapping value sets. If they share no variables, they are NOT disjoint
         (could both be true simultaneously) — no clustering.
         """
-        prev_regions = prev_ghost.get("_regions")
+        prev_regions = _tl_ghost_ast(prev_ghost.get("ast_key")).get("_regions") or prev_ghost.get("_regions")
         if not prev_regions:
             return False
 
@@ -320,7 +339,7 @@ init python:
 
         seen_fns = []
         for _cond, _blk in entries:
-            seen_fns.append(_tl_make_seen_fn(_blk) if _blk else ("never",))
+            seen_fns.append(_tl_make_seen_fn_cached(_blk))
 
         return {
             "ast_key":        (if_node.filename, if_node.linenumber),
@@ -474,20 +493,25 @@ init python:
         if TL_DEBUG_GHOST:
             _tl_log("TL ghost cluster_imgs: {}".format(branch_imgs))
 
+        _cache_key = str(group[0]["ast_key"])
+        _existing  = (persistent._tl_ghost_node_cache or {}).get(_cache_key)
+        if _existing is None or _existing.get("conditions") != conditions:
+            persistent._tl_ghost_node_cache[_cache_key] = {
+                "conditions":     conditions,
+                "seen_fns":       seen_fns,
+                "affecting_vars": sorted(affecting_vars),
+                "_regions":       regions,
+            }
         store._tl_ghost_nodes.append({
-            "type":              "branch",
             "ast_key":           group[0]["ast_key"],
-            "conditions":        conditions,
-            "seen_fns":          seen_fns,
             "taken_index":       taken_index,
-            "affecting_vars":    sorted(affecting_vars),
             "branch_imgs":       branch_imgs,
             "cluster_with_prev": cluster_with_prev,
-            "_regions":          regions,
-            "member_ast_keys":   member_ast_keys,
         })
-        _tl_log("TL ghost appended cluster: root_ast={} members={} rows={} cluster={}".format(
-            group[0]["ast_key"], member_ast_keys, len(conditions), cluster_with_prev))
+        if TL_DEBUG_GHOST:
+            _tl_log("TL ghost appended cluster: root_ast={} members={} conditions={} affecting_vars={} cluster={}".format(
+                group[0]["ast_key"], member_ast_keys, conditions,
+                sorted(affecting_vars), cluster_with_prev))
 
     def _tl_on_if_execute(if_node, taken_index, pre_taken_seen=None):
         if not _tl_is_game_file(getattr(if_node, "filename", None) or ""):
@@ -522,8 +546,9 @@ init python:
 
             ## Skip ifs already synthesized by the lookahead pass.
             if (if_node.filename, if_node.linenumber) in store._tl_skip_ghost_ifs:
-                _tl_log("TL ghost skip (lookahead-synthesized): {}".format(
-                    (if_node.filename, if_node.linenumber)))
+                if TL_DEBUG_GHOST:
+                    _tl_log("TL ghost skip (lookahead-synthesized): {}".format(
+                        (if_node.filename, if_node.linenumber)))
                 return
 
             _run = _tl_collect_if_run(if_node)
@@ -568,7 +593,7 @@ init python:
             _entries = getattr(self, "entries", None) or []
             if _taken is not None and _taken < len(_entries):
                 _blk = _entries[_taken][1]
-                _sfn = _tl_make_seen_fn(_blk) if _blk else ("never",)
+                _sfn = _tl_make_seen_fn_cached(_blk)
                 if _sfn[0] != "never":
                     _pre_taken_seen = _tl_eval_seen_fn(_sfn)
         except Exception:
@@ -617,7 +642,8 @@ init python:
             ## Use the pre-execution snapshot for "New path" so image-based
             ## descriptors aren't polluted by Scene updates from this very execution.
             if pre_taken_seen is False:
-                _tl_log("TL notify: tier=new_path taken_seen=False")
+                if TL_DEBUG_GHOST:
+                    _tl_log("TL notify: tier=new_path taken_seen=False")
                 renpy.show_screen("_tl_notify", message="⎇ New path")
                 return
 
@@ -629,9 +655,10 @@ init python:
                 if _i != _taken_glob_i and not _tl_eval_seen_fn(_sfn)
             )
             if _locked > 0:
-                _tl_log("TL notify: tier=icon locked={}".format(_locked))
+                if TL_DEBUG_GHOST:
+                    _tl_log("TL notify: tier=icon locked={}".format(_locked))
                 renpy.show_screen("_tl_notify", message="⎇")
-            else:
+            elif TL_DEBUG_GHOST:
                 _tl_log("TL notify: tier=suppress")
             ## all branches seen — suppress
         except Exception:
@@ -655,10 +682,10 @@ init python:
                 not config.skipping):
             return
         if store._tl_ghost_nodes or store._tl_skip_ghost_ifs:
-            _n = len(store._tl_ghost_nodes)
+            if TL_DEBUG_GHOST:
+                _tl_log("TL screen_navigate: cleared ghost={}".format(len(store._tl_ghost_nodes)))
             store._tl_ghost_nodes    = []
             store._tl_skip_ghost_ifs = set()
-            _tl_log("TL screen_navigate: cleared ghost={}".format(_n))
 
     config.statement_callbacks.append(_tl_on_screen_navigate)
 

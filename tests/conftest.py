@@ -42,6 +42,7 @@ _persistent = types.SimpleNamespace(
     _tl_var_domain={},
     _tl_var_is_numeric=set(),
     _tl_var_defaults={},
+    _tl_ghost_node_cache={},
 )
 
 # store stub — wraps persistent for attribute delegation

@@ -91,7 +91,8 @@ init -2 python:
             if not _vn or _vn.startswith("_"):
                 continue
             if _bc is None:
-                _tl_log("TL default skip {}: bytecode=None code={}".format(_vn, _code))
+                if TL_DEBUG_ROUTE:
+                    _tl_log("TL default skip {}: bytecode=None code={}".format(_vn, _code))
                 continue
             try:
                 _dv = renpy.python.py_eval_bytecode(_bc)
@@ -100,7 +101,8 @@ init -2 python:
                 elif TL_DEBUG_ROUTE:
                     _tl_log("TL default skip {}: non-scalar type={}".format(_vn, type(_dv).__name__))
             except Exception as _e:
-                _tl_log("TL default skip {}: eval error {}".format(_vn, _e))
+                if TL_DEBUG_ROUTE:
+                    _tl_log("TL default skip {}: eval error {}".format(_vn, _e))
         _tl_log("TL default walk: found {} Default nodes, captured {}".format(_found, len(_defaults)))
         route_vars.update(_defaults.keys())
         for _vn, _dv in _defaults.items():
@@ -213,8 +215,8 @@ init -2 python:
 
         ghost_vars = set()
         for _g in ghost_nodes:
-            for _v in (_g.get("affecting_vars") or []):
-                ghost_vars.add(_v)
+            _av = _tl_ghost_ast(_g["ast_key"]).get("affecting_vars") or _g.get("affecting_vars") or []
+            ghost_vars.update(_av)
 
         recently_changed = getattr(store, "_tl_recently_changed_vars", None) or set()
         highlighted = ghost_vars | recently_changed

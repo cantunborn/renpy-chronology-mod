@@ -533,3 +533,132 @@ class TestNotifyBranch:
         assert len(self._show_screen_calls) == 1
         assert "New path" in self._show_screen_calls[0][1]["message"]
 
+
+# ---------------------------------------------------------------------------
+# _tl_make_seen_fn_cached — seen_fn descriptor cache
+# ---------------------------------------------------------------------------
+
+_make_cached = ns["_tl_make_seen_fn_cached"]
+_seen_fn_cache = ns["_TL_SEEN_FN_CACHE"]
+
+
+class TestSeenFnCache:
+    def setup_method(self):
+        _seen_fn_cache.clear()
+
+    def test_none_block_returns_never(self):
+        assert _make_cached(None) == ("never",)
+
+    def test_none_does_not_populate_cache(self):
+        _make_cached(None)
+        assert len(_seen_fn_cache) == 0
+
+    def test_result_matches_underlying_fn(self):
+        blk = [Say("hello world")]
+        result = _make_cached(blk)
+        expected = ns["_tl_make_seen_fn"](blk)
+        assert result == expected
+
+    def test_cache_populated_after_first_call(self):
+        blk = [Say("hello")]
+        _make_cached(blk)
+        key = ns["_tl_builtin_id"](blk)
+        assert key in _seen_fn_cache
+
+    def test_underlying_fn_called_only_once_for_same_block(self):
+        blk = [Say("hello")]
+        call_count = [0]
+        orig = ns["_tl_make_seen_fn"]
+        def counting_fn(_b):
+            call_count[0] += 1
+            return orig(_b)
+        ns["_tl_make_seen_fn"] = counting_fn
+        try:
+            _make_cached(blk)
+            _make_cached(blk)
+            _make_cached(blk)
+        finally:
+            ns["_tl_make_seen_fn"] = orig
+        assert call_count[0] == 1
+
+    def test_different_blocks_get_separate_entries(self):
+        blk_a = [Say("path a")]
+        blk_b = [Say("path b")]
+        _make_cached(blk_a)
+        _make_cached(blk_b)
+        assert len(_seen_fn_cache) == 2
+
+    def test_same_block_object_returns_cached_value(self):
+        blk = [Say("hello")]
+        first = _make_cached(blk)
+        orig = ns["_tl_make_seen_fn"]
+        ns["_tl_make_seen_fn"] = lambda _b: ("poisoned",)
+        try:
+            second = _make_cached(blk)
+        finally:
+            ns["_tl_make_seen_fn"] = orig
+        assert second == first
+
+    def test_empty_block_returns_never(self):
+        blk = []
+        result = _make_cached(blk)
+        assert result == ("never",)
+
+
+# ---------------------------------------------------------------------------
+# _tl_ghost_ast / _tl_emit_ghost_cluster — persistent AST cache
+# ---------------------------------------------------------------------------
+
+_ghost_ast    = ns["_tl_ghost_ast"]
+_emit_cluster = ns["_tl_emit_ghost_cluster"]
+
+
+def _make_group(ast_key, conditions, seen_fns=None, affecting_vars=None):
+    """Minimal payload group for _tl_emit_ghost_cluster."""
+    return [{
+        "ast_key":        ast_key,
+        "conditions":     conditions,
+        "seen_fns":       seen_fns or [None] * len(conditions),
+        "affecting_vars": set(affecting_vars or []),
+        "branch_img_seqs": [([], None)] * len(conditions),
+        "context_img":    None,
+        "_regions":       [],
+        "taken_index":    0,
+        "all_branches_exit": False,
+    }]
+
+
+class TestGhostNodeCache:
+    def setup_method(self):
+        # Reset store and persistent between tests.
+        ns["store"]._tl_ghost_nodes = []
+        ns["persistent"]._tl_ghost_node_cache = {}
+
+    def test_ast_cache_written_after_emit(self):
+        group = _make_group(("f.rpy", 10), ["x > 0", "True"])
+        _emit_cluster(group, cluster_with_prev=False)
+        cache = ns["persistent"]._tl_ghost_node_cache
+        assert str(("f.rpy", 10)) in cache
+
+    def test_store_dict_has_only_slim_fields(self):
+        group = _make_group(("f.rpy", 20), ["a == 1", "True"])
+        _emit_cluster(group, cluster_with_prev=False)
+        node = ns["store"]._tl_ghost_nodes[0]
+        assert set(node.keys()) == {"ast_key", "taken_index", "branch_imgs", "cluster_with_prev"}
+
+    def test_ghost_ast_returns_correct_data(self):
+        group = _make_group(("f.rpy", 30), ["score > 5", "True"], affecting_vars=["score"])
+        _emit_cluster(group, cluster_with_prev=False)
+        cached = _ghost_ast(("f.rpy", 30))
+        assert cached.get("conditions") == ["score > 5", "True"]
+        assert "score" in (cached.get("affecting_vars") or [])
+
+    def test_second_emit_same_key_does_not_overwrite(self):
+        group = _make_group(("f.rpy", 40), ["y > 0", "True"])
+        _emit_cluster(group, cluster_with_prev=False)
+        # Mutate the cache entry directly to confirm it is NOT overwritten.
+        ns["persistent"]._tl_ghost_node_cache[str(("f.rpy", 40))]["_sentinel"] = True
+        _emit_cluster(group, cluster_with_prev=False)
+        cached = ns["persistent"]._tl_ghost_node_cache[str(("f.rpy", 40))]
+        assert cached.get("_sentinel") is True
+

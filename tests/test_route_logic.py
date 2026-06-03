@@ -245,9 +245,10 @@ class TestBuildRouteChips:
         self._saved_seen_keys = getattr(ns["store"], "_tl_var_if_seen_keys", {})
         self._saved_ghost     = getattr(ns["store"], "_tl_ghost_nodes", [])
         self._saved_rcv       = getattr(ns["store"], "_tl_recently_changed_vars", set())
-        ns["persistent"]._tl_route_var_names = []
-        ns["persistent"]._tl_var_if_count    = {}
-        ns["persistent"]._tl_var_defaults    = {}
+        ns["persistent"]._tl_route_var_names  = []
+        ns["persistent"]._tl_var_if_count     = {}
+        ns["persistent"]._tl_var_defaults     = {}
+        ns["persistent"]._tl_ghost_node_cache = {}
         ns["store"]._tl_var_if_seen_keys      = {}
         ns["store"]._tl_ghost_nodes           = []
         ns["store"]._tl_recently_changed_vars = set()
@@ -306,11 +307,19 @@ class TestBuildRouteChips:
         chips = _build_chips()
         assert any(c[0] == "route_id" for c in chips)
 
+    def _ghost_node(self, ast_key, affecting_vars):
+        """Populate cache and return slim ghost dict."""
+        ns["persistent"]._tl_ghost_node_cache[str(ast_key)] = {
+            "conditions": [], "seen_fns": [], "_regions": [],
+            "affecting_vars": list(affecting_vars),
+        }
+        return {"ast_key": ast_key, "taken_index": 0, "branch_imgs": [], "cluster_with_prev": False}
+
     def test_var_at_default_but_ghost_highlighted_shown(self):
         ## At default value but highlighted as ghost var → still shown
         ns["persistent"]._tl_var_defaults = {"trust": "low"}
         self._setup("trust", "low")
-        ns["store"]._tl_ghost_nodes = [{"affecting_vars": ["trust"]}]
+        ns["store"]._tl_ghost_nodes = [self._ghost_node(("f.rpy", 1), ["trust"])]
         chips = _build_chips()
         assert any(c[0] == "trust" for c in chips)
 
@@ -337,7 +346,7 @@ class TestBuildRouteChips:
 
     def test_ghost_var_shown(self):
         self._setup("trust", "high", if_count=1)
-        ns["store"]._tl_ghost_nodes = [{"affecting_vars": ["trust"]}]
+        ns["store"]._tl_ghost_nodes = [self._ghost_node(("f.rpy", 2), ["trust"])]
         chips = _build_chips()
         assert any(c[0] == "trust" for c in chips)
 
@@ -350,7 +359,7 @@ class TestBuildRouteChips:
     def test_ghost_vars_ordered_before_non_ghost(self):
         self._setup("trust", "high", if_count=3)
         self._setup("route_id", "romance", if_count=5)
-        ns["store"]._tl_ghost_nodes = [{"affecting_vars": ["trust"]}]
+        ns["store"]._tl_ghost_nodes = [self._ghost_node(("f.rpy", 3), ["trust"])]
         chips = _build_chips()
         names = [c[0] for c in chips]
         assert names.index("trust") < names.index("route_id")
@@ -368,6 +377,27 @@ class TestBuildRouteChips:
         match = next((c for c in chips if c[0] == "affection"), None)
         assert match is not None
         assert match[1] == 42
+
+    def test_ghost_highlighting_reads_affecting_vars_from_cache(self):
+        ## Regression: slim ghost dicts have no affecting_vars field.
+        ## Before the fix, _tl_build_route_chips read _g.get("affecting_vars") → None,
+        ## so ghost vars were never highlighted — vars at default stayed hidden and
+        ## the ghost group didn't appear first in the sort order.
+        ns["persistent"]._tl_var_defaults = {"trust": "low"}
+        self._setup("trust", "low", if_count=1)    ## at default → hidden unless ghost-highlighted
+        self._setup("route_id", "romance", if_count=1)  ## not a ghost var
+        slim = {"ast_key": ("f.rpy", 1), "taken_index": 0, "branch_imgs": [], "cluster_with_prev": False}
+        ns["persistent"]._tl_ghost_node_cache[str(("f.rpy", 1))] = {
+            "conditions": ["trust == 'high'"], "seen_fns": [], "_regions": [],
+            "affecting_vars": ["trust"],
+        }
+        ns["store"]._tl_ghost_nodes = [slim]
+        chips = _build_chips()
+        names = [c[0] for c in chips]
+        ## trust must appear (default-hide overridden by ghost highlight)
+        assert "trust" in names
+        ## trust must sort before route_id (ghost bucket before non-ghost)
+        assert names.index("trust") < names.index("route_id")
 
 
 # ---------------------------------------------------------------------------

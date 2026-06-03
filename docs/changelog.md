@@ -7,6 +7,31 @@ that is present in the codebase but not yet committed.
 
 ## Unreleased
 
+### Perf: move ghost node AST fields to persistent cache — reduces rollback log bloat
+
+- **`backend/tl_ghost_logic.rpy`** — added `_tl_ghost_ast(ast_key)` helper that reads from `persistent._tl_ghost_node_cache`. Modified `_tl_emit_ghost_cluster` to split the appended dict: AST-derived fields (`conditions`, `seen_fns`, `affecting_vars`, `_regions`) are written to `persistent._tl_ghost_node_cache[str(ast_key)]` once (with invalidation check); `store._tl_ghost_nodes` now appends a slim dict with only 4 runtime fields (`ast_key`, `taken_index`, `branch_imgs`, `cluster_with_prev`). Dropped `type` ("branch" constant) and `member_ast_keys` (logging only) from the store dict entirely.
+- **`timeline_init.rpy`** — added `persistent._tl_ghost_node_cache = {}` init guard.
+- **`ui/tl_ghost_cards.rpy`** — `screen tl_ghost_card` pre-fetches AST data via `_tl_ghost_ast(ghost["ast_key"])`; reads `seen_fns` and `conditions` from cache. `screen tl_ghost_rows` uses `_tl_ghost_ast()` for branch count instead of `ghost["conditions"]`.
+- **`ui/tl_route_screen.rpy`** — `affecting_vars` lookup uses `_tl_ghost_ast(_g["ast_key"])` instead of `_g.get("affecting_vars")`.
+- **`tests/test_ghost_logic.py`** — added `TestGhostNodeCache` (4 tests).
+- **`tests/conftest.py`** — added `_tl_ghost_node_cache={}` to persistent stub.
+- **Why**: each `If.execute` append to `_tl_ghost_nodes` caused RenPy's rollback to snapshot the full list (O(N²) log growth, ~200 KB per inter-menu segment with 20 ghost nodes). AST-derived fields are static — same data every execution — so they belong in persistent, not the rollback log.
+
+### Cleanup: log audit — remove performance instrumentation, guard verbose logs behind debug flags
+
+- **`backend/tl_ghost_logic.rpy`** — removed `_if_execute slow` timing block (performance instrumentation). Verbose clustering and emit details already guarded by `TL_DEBUG_GHOST`.
+- **`backend/tl_route_logic.rpy`** — moved `TL default skip: bytecode=None` and `TL default skip: eval error` behind `TL_DEBUG_ROUTE`. Summary walk log stays always-on.
+- **`backend/tl_saveload.rpy`** — removed `check=`, `save=`, `total=` timing fields from `TL pre-save` log; removed `check=` timing field from `TL pre-save skip (exists)`.
+- **`timeline_hooks.rpy`** — removed the `TL record_before` block (pre-save timing and seen_fn stats instrumentation). Moved `TL img_name` and `TL movie thumb fallback` behind `TL_DEBUG_MENU`.
+- **`timeline_init.rpy`** — added `TL_DEBUG_MENU` and `TL_DEBUG_ASSET` flag constants alongside existing `TL_DEBUG_GHOST`, `TL_DEBUG_SEEN`, `TL_DEBUG_ROUTE`.
+- **`backend/tl_assets.rpy`** — removed `TL_LOG_ASSET_THUMB_HITS` local constant; moved asset thumb hit/generated, scene img fallback attr, ast-walk miss, and menu_scene_map cache stats behind `TL_DEBUG_ASSET`.
+
+### Perf: cache seen_fn descriptors in ghost card pipeline
+
+- **`backend/tl_ghost_logic.rpy`** — added `_TL_SEEN_FN_CACHE` (module-level dict, outside rollback and save systems) and `_tl_make_seen_fn_cached` wrapper. Keyed by `_tl_builtin_id(branch_block)` — RenPy AST branch block objects are stable Python objects for the session lifetime, making `id()` a safe, permanent key.
+- Replaced both `_tl_make_seen_fn(_blk)` call sites (line 323 in `_tl_build_ghost_payload`, line 571 in `_tl_if_execute_patched`) with the cached version.
+- In sandbox games, the same If nodes fire repeatedly as the player navigates between locations. Without caching, each firing redoes the full AST walk (up to 30–80 `.next` hops + translator lookups) for every branch. With caching, subsequent firings of the same If node are a single dict lookup.
+
 ### Fix: _tl_cancel_replay was still writing to persistent._tl_thumb_cache
 
 - **`backend/tl_saveload.rpy`** (`_tl_cancel_replay`) — thumbnail snapshot before recovery load now writes to `renpy.game._tl_thumb_cache` instead of `persistent._tl_thumb_cache`. This was the last remaining call site missed when migrating the cache. Also removed the stray `renpy.save_persistent()` call that followed (no longer needed — cache is not in persistent).

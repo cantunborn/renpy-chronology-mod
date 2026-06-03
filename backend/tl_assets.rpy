@@ -7,7 +7,6 @@ init -2 python:
 
     TL_ASSET_THUMB_CACHE_MAX     = 500
     TL_ASSET_THUMB_CACHE_VERSION = 1
-    TL_LOG_ASSET_THUMB_HITS      = False
 
     _tl_asset_thumb_displayable_cache = {}
     _tl_asset_thumb_file_cache        = {}
@@ -73,8 +72,9 @@ init -2 python:
             for _attr, _val in _d.items():
                 _img = _tl_normalize_img_name(_val)
                 if _img:
-                    _tl_log("TL scene img fallback attr: type={} attr={} img={}".format(
-                        type(stmt).__name__, _attr, _img))
+                    if TL_DEBUG_ASSET:
+                        _tl_log("TL scene img fallback attr: type={} attr={} img={}".format(
+                            type(stmt).__name__, _attr, _img))
                     return _img
         except Exception:
             pass
@@ -255,12 +255,12 @@ init -2 python:
                 return None
 
             if fit_mode == "cover":
-                _scale = max(float(_w) / float(_sw), float(_h) / float(_sh))
+                _scale = _TL_MAX(float(_w) / float(_sw), float(_h) / float(_sh))
             else:
-                _scale = min(float(_w) / float(_sw), float(_h) / float(_sh))
+                _scale = _TL_MIN(float(_w) / float(_sw), float(_h) / float(_sh))
 
-            _tw = max(1, int(round(_sw * _scale)))
-            _th = max(1, int(round(_sh * _scale)))
+            _tw = _TL_MAX(1, int(round(_sw * _scale)))
+            _th = _TL_MAX(1, int(round(_sh * _scale)))
 
             try:
                 renpy.display.render.blit_lock.acquire()
@@ -270,13 +270,13 @@ init -2 python:
 
             _surf = renpy.display.pgrender.surface((_w, _h), True)
             if fit_mode == "cover":
-                _sx = max(0, int(round((_tw - _w) / 2.0)))
-                _sy = max(0, int(round((_th - _h) / 2.0)))
-                _crop = _scaled.subsurface((_sx, _sy, min(_w, _tw - _sx), min(_h, _th - _sy)))
+                _sx = _TL_MAX(0, int(round((_tw - _w) / 2.0)))
+                _sy = _TL_MAX(0, int(round((_th - _h) / 2.0)))
+                _crop = _scaled.subsurface((_sx, _sy, _TL_MIN(_w, _tw - _sx), _TL_MIN(_h, _th - _sy)))
                 _surf.blit(_crop, (0, 0))
             else:
-                _dx = max(0, int(round((_w - _tw) / 2.0)))
-                _dy = max(0, int(round((_h - _th) / 2.0)))
+                _dx = _TL_MAX(0, int(round((_w - _tw) / 2.0)))
+                _dy = _TL_MAX(0, int(round((_h - _th) / 2.0)))
                 _surf.blit(_scaled, (_dx, _dy))
 
             if _surf is None:
@@ -303,7 +303,7 @@ init -2 python:
         _cache = getattr(renpy.game, "_tl_asset_thumb_cache", {})
         _bytes = _cache.get(_key)
         if _bytes is not None:
-            if TL_LOG_ASSET_THUMB_HITS:
+            if TL_DEBUG_ASSET:
                 _tl_log("TL asset thumb hit: img_name={}".format(img_name))
             return _bytes
         if not generate or _tl_img_name_is_movie(img_name):
@@ -311,9 +311,9 @@ init -2 python:
         _bytes = _tl_render_asset_thumb_bytes(img_name, width, height, fit_mode)
         if _bytes:
             _cache[_key] = _bytes
-            while len(_cache) > TL_ASSET_THUMB_CACHE_MAX:
-                _cache.pop(next(iter(_cache)))
-            _tl_log("TL asset thumb generated: img_name={}".format(img_name))
+            persistent._tl_asset_thumb_dirty = True
+            if TL_DEBUG_ASSET:
+                _tl_log("TL asset thumb generated: img_name={}".format(img_name))
         return _bytes
 
     def _tl_resolve_live_menu_img_name():
@@ -431,11 +431,12 @@ init -2 python:
                         persistent._tl_menu_scene_map[_mk] = _last_img
                         _new_entries[0] += 1
                     else:
-                        _tl_log("TL ast-walk miss: menu=({},{}) last_img=None".format(
-                            _node.filename, _node.linenumber))
+                        if TL_DEBUG_ASSET:
+                            _tl_log("TL ast-walk miss: menu=({},{}) last_img=None".format(
+                                _node.filename, _node.linenumber))
             return _last_img
 
         _tl_walk_ast_blocks(nodes, _visitor, initial_state=None)
-        if _new_entries[0]:
+        if _new_entries[0] and TL_DEBUG_ASSET:
             _tl_log("TL menu_scene_map: {} new entries cached".format(_new_entries[0]))
 

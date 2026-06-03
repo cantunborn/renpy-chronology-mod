@@ -55,22 +55,29 @@ A 3px accent bar at the top edge is shown when a card is highlighted (toggled by
 
 ## Payload Shape
 
-`store._tl_ghost_nodes` is a list of cluster dicts. Each entry:
+`store._tl_ghost_nodes` is a list of **slim** cluster dicts. Each entry contains only the 4 runtime fields that can change between executions:
 
 ```python
 {
-    "type":              "branch",
     "ast_key":           (filename, linenumber),   # root If node of the cluster
-    "conditions":        [...],                    # one condition string per branch
-    "seen_fns":          [...],                    # one seen descriptor tuple per branch
-    "taken_index":       int or None,              # index of taken branch (None if standalone)
-    "affecting_vars":    [...],                    # vars referenced in conditions
+    "taken_index":       int or None,              # index of taken branch
     "branch_imgs":       [...],                    # one image name (or None) per branch
     "cluster_with_prev": bool,                     # True = visually grouped with previous cluster
-    "_regions":          [...],                    # DNF region dicts for clustering logic
-    "member_ast_keys":   [...],                    # ast_keys of all If nodes in this cluster
 }
 ```
+
+AST-derived fields are stored once in `persistent._tl_ghost_node_cache[str(ast_key)]` and never roll back:
+
+```python
+{
+    "conditions":        [...],                    # one condition string per branch
+    "seen_fns":          [...],                    # one seen descriptor tuple per branch
+    "affecting_vars":    [...],                    # vars referenced in conditions
+    "_regions":          [...],                    # DNF region dicts for clustering logic
+}
+```
+
+The helper `_tl_ghost_ast(ast_key)` returns the cache entry or `{}`. All UI read sites use the pattern `_tl_ghost_ast(key).get(field) or ghost.get(field)` for backward compatibility with saves predating the cache split.
 
 ## Seen Logic
 
