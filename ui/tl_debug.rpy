@@ -85,6 +85,18 @@ screen tl_debug():
                     text_hover_color "#ffffff"
 
                 null ysize 4
+                textbutton "Salvage history ast_keys":
+                    style "tl_frame_base"
+                    background Solid("#1e293b")
+                    hover_background Solid("#334155")
+                    padding (8, 6, 8, 6)
+                    action Function(_tl_salvage_history_ast_keys)
+                    text_style "tl_base"
+                    text_size TL_SIZE_DOT
+                    text_color "#7dd3fc"
+                    text_hover_color "#ffffff"
+
+                null ysize 4
                 text "` to hide":
                     style "tl_base"
                     size TL_SIZE_DOT

@@ -713,6 +713,102 @@ class TestPathHasDanger:
         assert self._danger([Say(), Menu(), Jump("bad")], danger_labels={"bad"}) is False
 
 
+# =============================================================================
+# _tl_salvage_history_ast_keys
+# =============================================================================
+
+import sys as _sys
+import types as _types
+import conftest as _cf
+_renpy = _sys.modules["renpy"]
+_salvage = _rpy_ns.get("_tl_salvage_history_ast_keys")
+
+def _make_menu_stub(filename, linenumber, option_labels):
+    """Build a Menu stub (type name 'Menu') with real option items."""
+    m = _cf.Menu(items=[(lbl, "True", []) for lbl in option_labels])
+    m.filename   = filename
+    m.linenumber = linenumber
+    return m
+
+def _reset_lookup_cache():
+    """Clear the runtime cache so _tl_live_menu_lookup() rebuilds from namemap."""
+    _renpy.game.script._tl_runtime_cache_store = {}
+
+
+class TestSalvageAstKeys:
+    """_tl_salvage_history_ast_keys: re-match stale ast_keys after game script updates."""
+
+    def setup_method(self):
+        _renpy.game.script.namemap = {}
+        _reset_lookup_cache()
+        _rpy_ns["store"]._tl_history = []
+        _renpy.game.script._tl_runtime_cache_store = {}
+
+    def teardown_method(self):
+        _renpy.game.script.namemap = {}
+        _reset_lookup_cache()
+
+    def test_stale_node_gets_rematched(self):
+        """Stale ast_key → matched to nearby live menu with same options."""
+        m = _make_menu_stub("script.rpy", 100, ["Option A", "Option B"])
+        _renpy.game.script.namemap = {"k": m}
+        _reset_lookup_cache()
+
+        node = {"index": 0, "ast_key": ("script.rpy", 95),
+                "options": ["Option A", "Option B"], "img_name": "bg noon"}
+        _rpy_ns["store"]._tl_history = [node]
+
+        r = _salvage()
+        assert r["matched"] == 1
+        assert r["skipped"] == 0
+        assert r["unmatched"] == 0
+
+    def test_valid_node_is_skipped(self):
+        """Node whose ast_key is already valid in the live lookup is skipped untouched."""
+        m = _make_menu_stub("script.rpy", 42, ["Yes", "No"])
+        _renpy.game.script.namemap = {"k": m}
+        _reset_lookup_cache()
+
+        node = {"index": 0, "ast_key": ("script.rpy", 42),
+                "options": ["Yes", "No"], "img_name": "bg room"}
+        _rpy_ns["store"]._tl_history = [node]
+
+        r = _salvage()
+        assert r["skipped"] == 1
+        assert r["matched"] == 0
+        assert node["ast_key"] == ("script.rpy", 42)  ## untouched
+        assert node["img_name"] == "bg room"           ## untouched
+
+    def test_no_candidate_is_unmatched(self):
+        """Stale node with no overlapping live menu options stays unmatched."""
+        m = _make_menu_stub("script.rpy", 100, ["Alpha", "Beta"])
+        _renpy.game.script.namemap = {"k": m}
+        _reset_lookup_cache()
+
+        node = {"index": 0, "ast_key": ("script.rpy", 90),
+                "options": ["Gamma", "Delta"], "img_name": "bg noon"}
+        _rpy_ns["store"]._tl_history = [node]
+
+        r = _salvage()
+        assert r["unmatched"] == 1
+        assert r["matched"] == 0
+        assert node["ast_key"] == ("script.rpy", 90)  ## unchanged
+
+    def test_restamp_clears_img_name_and_updates_ast_key(self):
+        """Matched node gets new ast_key and img_name cleared for re-migration."""
+        m = _make_menu_stub("script.rpy", 200, ["Stay", "Leave"])
+        _renpy.game.script.namemap = {"k": m}
+        _reset_lookup_cache()
+
+        node = {"index": 0, "ast_key": ("script.rpy", 185),
+                "options": ["Stay", "Leave"], "img_name": "bg old"}
+        _rpy_ns["store"]._tl_history = [node]
+
+        _salvage()
+        assert node["ast_key"] == ("script.rpy", 200)
+        assert node["img_name"] is None
+
+
 if __name__ == "__main__":
     passed = failed = 0
     for cls_name, cls in sorted(globals().items()):

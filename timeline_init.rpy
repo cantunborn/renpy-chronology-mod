@@ -179,6 +179,8 @@ init python:
     if _mig_thumb or _mig_asset:
         _tl_log("TL thumbs migration: moved thumb={} asset={} from persistent".format(
             _mig_thumb, _mig_asset))
+        if _mig_asset:
+            persistent._tl_asset_thumb_dirty = True
 
     def _tl_save_thumbs():
         import os as _os, gzip as _gz
@@ -186,7 +188,10 @@ init python:
         _atc = getattr(renpy.game, "_tl_asset_thumb_cache", None)
         _dirty = getattr(persistent, "_tl_asset_thumb_dirty", False)
         _has_replay_thumbs = bool(_tc)
-        if not _dirty and not _has_replay_thumbs:
+        _path = _os.path.join(renpy.config.savedir, "_tl_thumbs.pkl")
+        _no_file = not _os.path.exists(_path)
+        _has_asset_thumbs = bool(_atc)
+        if not _dirty and not _has_replay_thumbs and not (_no_file and _has_asset_thumbs):
             _tl_log("TL thumbs save skipped: cache unchanged")
             return
         try:
@@ -195,7 +200,6 @@ init python:
                 "thumb":       _tc or {},
                 "asset_thumb": _atc or {},
             }
-            _path = _os.path.join(renpy.config.savedir, "_tl_thumbs.pkl")
             with _gz.open(_path, "wb", compresslevel=1) as _f:
                 _f.write(_pd(_d))
             _tl_log("TL thumbs saved: thumb={} asset={}".format(
@@ -237,6 +241,118 @@ init -2 python:
         _tl_build_route_index(nodes)
         _tl_build_coverage_index(nodes)
         _tl_build_menu_scene_index(nodes)
+
+
+    def _tl_salvage_history_ast_keys(line_slop=100):
+        """
+        Re-match stale history ast_keys to current AST menus after a game script update.
+
+        A node is stale when its ast_key is not present in the live menu lookup.
+        Matching uses content (history options ⊆ live menu labels) as the primary
+        signal and line proximity (within line_slop) as secondary. A used-key set
+        prevents two history nodes from claiming the same live menu.
+
+        On match: re-stamps ast_key and clears img_name so _tl_migrate_img_names()
+        can refill it from the current scene map.
+
+        Returns {skipped, matched, unmatched, total}.
+        User-triggered only — not called automatically on load.
+        """
+        _live    = _tl_live_menu_lookup()
+        _history = getattr(store, "_tl_history", [])
+        if not _history:
+            _msg = "Salvage: nothing to do (empty history)"
+            _tl_log("TL salvage: " + _msg)
+            renpy.notify(_msg)
+            return {"skipped": 0, "matched": 0, "unmatched": 0, "total": 0}
+
+        ## Build candidate map: filename -> sorted [(line, menu_node)]
+        _by_file = {}
+        for (_cfile, _cline), _cmenu in _live.items():
+            _by_file.setdefault(_cfile, []).append((_cline, _cmenu))
+        for _lst in _by_file.values():
+            _lst.sort()
+
+        _skipped       = 0
+        _matched       = 0
+        _unmatched     = 0
+        _any_matched   = False
+        _used_keys     = set()   ## live (file, line) keys claimed by a resolved stale key
+        _stale_to_live = {}      ## stale (file, line) -> live (file, line) or None
+
+        for _n in _history:
+            _ak = _n.get("ast_key")
+            if not isinstance(_ak, (list, tuple)) or len(_ak) != 2:
+                _unmatched += 1
+                continue
+            _ak = tuple(_ak)
+            _stored_file, _stored_line = _ak
+
+            ## Already valid — live menu exists at this exact key
+            if _ak in _live:
+                _skipped += 1
+                continue
+
+            ## Same stale key seen before (e.g. looping menu) — reuse cached result
+            if _ak in _stale_to_live:
+                _cached = _stale_to_live[_ak]
+                if _cached is None:
+                    _unmatched += 1
+                else:
+                    _live_menu = _live[_cached]
+                    _n["ast_key"]  = (_live_menu.filename, _live_menu.linenumber)
+                    _n["img_name"] = None
+                    _matched    += 1
+                    _any_matched = True
+                continue
+
+            ## Stale and unseen — search candidates in same file
+            _candidates   = _by_file.get(_stored_file, [])
+            _history_opts = frozenset(_n.get("options") or [])
+
+            _best      = None
+            _best_dist = line_slop + 1
+            for (_cline, _cmenu) in _candidates:
+                _ckey = (_stored_file, _cline)
+                if _ckey in _used_keys:
+                    continue                   ## already claimed by a different stale key
+                _live_labels = frozenset(
+                    _item[0] for _item in (_cmenu.items or []) if _item[2] is not None
+                )
+                if not (_history_opts <= _live_labels):
+                    continue                   ## content mismatch
+                _dist = abs(_stored_line - _cline)
+                if _dist <= line_slop and _dist < _best_dist:
+                    _best      = (_cline, _cmenu)
+                    _best_dist = _dist
+
+            if _best is None:
+                _stale_to_live[_ak] = None
+                _unmatched += 1
+                _tl_log("TL salvage: node={} {}:{} -> unmatched (opts={})".format(
+                    _n.get("index"), _stored_file, _stored_line, len(_history_opts)))
+                continue
+
+            _new_line, _new_menu = _best
+            _new_key              = (_stored_file, _new_line)
+            _stale_to_live[_ak]  = _new_key
+            _used_keys.add(_new_key)
+            _n["ast_key"]  = (_new_menu.filename, _new_menu.linenumber)
+            _n["img_name"] = None
+            _matched    += 1
+            _any_matched = True
+            _tl_log("TL salvage: node={} {} {}->{}".format(
+                _n.get("index"), _stored_file, _stored_line, _new_line))
+
+        if _any_matched:
+            _tl_migrate_img_names()
+            renpy.save_persistent()
+
+        _msg = "Salvage: {} matched / {} missed / {} ok".format(_matched, _unmatched, _skipped)
+        _tl_log("TL salvage: total={} matched={} unmatched={} skipped={}".format(
+            len(_history), _matched, _unmatched, _skipped))
+        renpy.notify(_msg)
+        return {"skipped": _skipped, "matched": _matched, "unmatched": _unmatched, "total": len(_history)}
 
 
     def _tl_migrate_img_names():
