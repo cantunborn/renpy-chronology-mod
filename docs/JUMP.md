@@ -34,10 +34,9 @@ _tl_begin_jump(node_index, option_index)
     -> renpy.save_persistent()
     -> [Tier 1] _tl_find_pre_save(node_index, context, ast_key)
         -> if found: store._tl_load_slot = slot; return "load"    [EXACT PRE-SAVE]
-    -> [Tier 2] _tl_find_nearest_pre_save(node_index - 1, context, history)
-        -> if found: store._tl_load_slot = slot; return "load"    [NEAREST PRE-SAVE + SKIP]
-    -> [Tier 3] _tl_find_nearest_save(node_index - 1, context, chap_candidates)
-        -> if found: store._tl_load_slot = slot; return "load"    [CH_* CHECKPOINT + SKIP]
+    -> [Tier 2] _tl_find_nearest_any_save(node_index - 1, context, history, chap_candidates)
+        -> competes _pre_* and _ch_* by index; returns highest-index slot ≤ N-1
+        -> if found: store._tl_load_slot = slot; return "load"    [NEAREST SAVE + SKIP]
         -> if not found: clear replay state, notify user, return None
 
 label _tl_do_load
@@ -75,11 +74,7 @@ Pre-save slot format: `_pre_{NNNN}_{h6}` where `h6 = md5(repr((tuple(context[:N]
 
 ## Nearest-save Fallback (Skip Path)
 
-There are now two tiers of fallback before the old `_ch_*` checkpoint path:
-
-**Tier 2 — nearest pre-save:** `_tl_find_nearest_pre_save(N-1, context, history)` scans all `_pre_*` files and returns the one with the highest index ≤ N-1 that matches the context prefix and recorded `ast_key`. This is better than a `_ch_*` checkpoint because pre-saves are written before every menu, so the skip phase is shorter (lands at a menu, not mid-dialogue).
-
-**Tier 3 — nearest checkpoint:** When no earlier pre-save exists, `_tl_find_nearest_save(N-1, context)` scans the root savedir for `_ch_*` files, validates each against the current `context` (hash check), and returns the one with the highest index ≤ N-1. Chapter-end saves (`_ch_chap_*`) are also eligible as jump checkpoints and are passed in as pre-validated `chap_candidates`.
+**Tier 2 — nearest save (any pool):** `_tl_find_nearest_any_save(N-1, context, history, chap_candidates)` competes both pools — pre-saves (`_pre_*`) and `_ch_*` checkpoints (including chapter-end saves) — and returns whichever slot has the highest index ≤ N-1. Both underlying finders expose their winning index via a `_meta={}` dict so the comparison is by actual proximity, not by save type. Chapter-end saves (`_ch_chap_*`) are included via `chap_candidates`; since their slot names are not index-parseable, `_tl_find_nearest_save` tracks their index internally and reports it through `_meta`.
 
 After loading the nearest save, `_tl_store_wrapper` is in replay mode. For each menu encountered before reaching node N, it looks up the node's index in `persistent._tl_replay_path` and auto-selects the recorded choice. RenPy's skip mode (`config.skipping`) is used to fast-forward dialogue between menus. When node N is finally reached, the target option is selected, replay ends, and skip is cleared.
 

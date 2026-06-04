@@ -6,12 +6,13 @@ import os, sys, hashlib, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from conftest import _rpy_ns, _tl_validate_history
 
-_tl_save_slot            = _rpy_ns["_tl_save_slot"]
-_tl_find_nearest_save    = _rpy_ns["_tl_find_nearest_save"]
-_tl_should_save          = _rpy_ns["_tl_should_save"]
-_tl_pre_save_slot        = _rpy_ns.get("_tl_pre_save_slot")
-_tl_find_pre_save        = _rpy_ns.get("_tl_find_pre_save")
+_tl_save_slot             = _rpy_ns["_tl_save_slot"]
+_tl_find_nearest_save     = _rpy_ns["_tl_find_nearest_save"]
+_tl_should_save           = _rpy_ns["_tl_should_save"]
+_tl_pre_save_slot         = _rpy_ns.get("_tl_pre_save_slot")
+_tl_find_pre_save         = _rpy_ns.get("_tl_find_pre_save")
 _tl_find_nearest_pre_save = _rpy_ns.get("_tl_find_nearest_pre_save")
+_tl_find_nearest_any_save = _rpy_ns.get("_tl_find_nearest_any_save")
 _tl_path_has_danger       = _rpy_ns.get("_tl_path_has_danger")
 
 
@@ -174,6 +175,32 @@ class TestFindNearestSave:
             result = _tl_find_nearest_save(10, ctx, d,
                 chap_candidates=[(5, "_ch_chap_end_abc123")])
             assert result == _tl_save_slot(9, ctx[:10])
+
+    def test_meta_index_populated(self):
+        """_meta["index"] equals the index of the returned slot."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0), ("B", 0), ("C", 0)]
+            make_save_files(d, [(2, ctx[:3])])
+            meta = {}
+            _tl_find_nearest_save(5, ctx, d, _meta=meta)
+            assert meta["index"] == 2
+
+    def test_meta_index_with_chap_candidate(self):
+        """_meta["index"] reflects chapter-end save when it wins."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0), ("B", 0)]
+            make_save_files(d, [(1, ctx[:2])])
+            meta = {}
+            _tl_find_nearest_save(10, ctx, d,
+                chap_candidates=[(7, "_ch_chap_end_xyz")], _meta=meta)
+            assert meta["index"] == 7
+
+    def test_meta_index_minus1_when_none_found(self):
+        """_meta["index"] is -1 when no slot is found."""
+        with tempfile.TemporaryDirectory() as d:
+            meta = {}
+            _tl_find_nearest_save(5, [("A", 1)], d, start_exists=False, _meta=meta)
+            assert meta["index"] == -1
 
 
 # =============================================================================
@@ -607,6 +634,98 @@ class TestFindNearestPreSave:
             make_pre_save_files(d, [(2, ctx)])  # ast_key=None
             result = _tl_find_nearest_pre_save(5, ctx, save_dir=d)
             assert result == _tl_pre_save_slot(2, ctx)
+
+    def test_meta_index_populated(self):
+        """_meta["index"] equals the winning slot's node index."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0), ("B", 1), ("C", 0)]
+            make_pre_save_files(d, [(3, ctx)])
+            meta = {}
+            _tl_find_nearest_pre_save(5, ctx, save_dir=d, _meta=meta)
+            assert meta["index"] == 3
+
+    def test_meta_index_minus1_when_none_found(self):
+        """_meta["index"] is -1 when no pre-save matches."""
+        with tempfile.TemporaryDirectory() as d:
+            meta = {}
+            _tl_find_nearest_pre_save(5, [("A", 0)], save_dir=d, _meta=meta)
+            assert meta["index"] == -1
+
+
+# =============================================================================
+# _tl_find_nearest_any_save
+# =============================================================================
+
+class TestFindNearestAnySave:
+    def setup_method(self):
+        assert _tl_find_nearest_any_save is not None, "_tl_find_nearest_any_save not found"
+
+    def test_ch_closer_than_pre_wins(self):
+        """_ch_* at index 8 beats pre-save at index 3 when targeting index 9."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)] * 10
+            make_save_files(d,     [(8, ctx[:9])])   # _ch_* at 8
+            make_pre_save_files(d, [(3, ctx)])        # _pre_* at 3
+            result = _tl_find_nearest_any_save(9, ctx, save_dir=d)
+            assert result == _tl_save_slot(8, ctx[:9])
+
+    def test_pre_closer_than_ch_wins(self):
+        """pre-save at index 7 beats _ch_* at index 2 when targeting index 9."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)] * 10
+            make_save_files(d,     [(2, ctx[:3])])   # _ch_* at 2
+            make_pre_save_files(d, [(7, ctx)])        # _pre_* at 7
+            result = _tl_find_nearest_any_save(9, ctx, save_dir=d)
+            assert result == _tl_pre_save_slot(7, ctx)
+
+    def test_only_ch_available(self):
+        """Old-style save: only _ch_* present, no pre-saves → returns _ch_*."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0), ("B", 0), ("C", 0)]
+            make_save_files(d, [(2, ctx[:3])])
+            result = _tl_find_nearest_any_save(5, ctx, save_dir=d)
+            assert result == _tl_save_slot(2, ctx[:3])
+
+    def test_only_pre_available(self):
+        """New-style save: only pre-saves present, no _ch_* → returns _pre_*."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0), ("B", 1)]
+            make_pre_save_files(d, [(4, ctx)])
+            result = _tl_find_nearest_any_save(6, ctx, save_dir=d)
+            assert result == _tl_pre_save_slot(4, ctx)
+
+    def test_chapter_end_beats_distant_pre(self):
+        """Chapter-end save at index 9 beats pre-save at index 3."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)] * 12
+            make_pre_save_files(d, [(3, ctx)])
+            result = _tl_find_nearest_any_save(11, ctx,
+                chap_candidates=[(9, "_ch_chap_end_abc123")], save_dir=d)
+            assert result == "_ch_chap_end_abc123"
+
+    def test_pre_beats_distant_chapter_end(self):
+        """Pre-save at index 8 beats chapter-end save at index 2."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)] * 10
+            make_pre_save_files(d, [(8, ctx)])
+            result = _tl_find_nearest_any_save(9, ctx,
+                chap_candidates=[(2, "_ch_chap_end_abc123")], save_dir=d)
+            assert result == _tl_pre_save_slot(8, ctx)
+
+    def test_nothing_found_returns_none(self):
+        """No saves of any kind → None."""
+        with tempfile.TemporaryDirectory() as d:
+            result = _tl_find_nearest_any_save(5, [("A", 0)], save_dir=d)
+            assert result is None
+
+    def test_equal_index_prefers_pre(self):
+        """When both pools return the same index, pre-save is preferred (>=)."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)] * 6
+            make_save_files(d,     [(5, ctx[:6])])   # _ch_* at 5
+            make_pre_save_files(d, [(5, ctx)])        # _pre_* at 5
+            result = _tl_find_nearest_any_save(5, ctx, save_dir=d)
+            assert result == _tl_pre_save_slot(5, ctx)
 
 
 # =============================================================================

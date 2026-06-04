@@ -41,7 +41,27 @@ init -2 python:
                 return _slot
         return None
 
-    def _tl_find_nearest_pre_save(target_index, context, history=None, save_dir=None):
+    def _tl_find_nearest_any_save(target_index, context, history=None, chap_candidates=None,
+            save_dir=None):
+        """
+        Return the slot (pre-save or _ch_*) with the highest index <= target_index.
+        Competes both pools so a nearby _ch_* checkpoint beats a distant pre-save,
+        including chapter-end saves whose slot names are not index-parseable.
+        """
+        _pre_meta = {}
+        _ch_meta  = {}
+        _pre = _tl_find_nearest_pre_save(target_index, context, history,
+            save_dir=save_dir, _meta=_pre_meta)
+        _ch  = _tl_find_nearest_save(target_index, context, save_dir=save_dir,
+            chap_candidates=chap_candidates, _meta=_ch_meta)
+        if _pre is None:
+            return _ch
+        if _ch is None:
+            return _pre
+        return _pre if _pre_meta.get("index", -1) >= _ch_meta.get("index", -1) else _ch
+
+    def _tl_find_nearest_pre_save(target_index, context, history=None, save_dir=None,
+            _meta=None):
         """
         Return the pre-menu save slot with the highest index <= target_index
         that shares the same (context prefix, ast_key) as recorded in history.
@@ -91,6 +111,8 @@ init -2 python:
                     _best_slot  = _name
         except Exception as _e:
             _tl_log("TL find_nearest_pre_save scan error: {}".format(_e))
+        if _meta is not None:
+            _meta["index"] = _best_index
         return _best_slot
 
     ## Minimal 1×1 black PNG — used to suppress full screenshots on RenPy 7
@@ -185,7 +207,7 @@ init -2 python:
         return False, None
 
     def _tl_find_nearest_save(target_index, context, save_dir=None,
-                                start_exists=None, chap_candidates=None):
+            start_exists=None, chap_candidates=None, _meta=None):
         """
         Find the chronology save slot with the highest index <= target_index
         that shares the same path prefix as context.
@@ -194,6 +216,7 @@ init -2 python:
             True = check filesystem, fall back to bare name if not found.
         chap_candidates: optional list of (after_index, full_slot_name) from
             chapter-end saves, pre-validated by the caller.
+        _meta: optional dict; populated with {"index": best_index} when provided.
         Returns slot name or None.
         """
         import os as _os
@@ -245,6 +268,9 @@ init -2 python:
             elif start_exists is True:
                 best_slot = "_ch_start"
                 _tl_log("TL find_nearest_save: using _ch_start fallback (caller-confirmed)")
+
+        if _meta is not None:
+            _meta["index"] = best_index
 
         return best_slot
 
@@ -359,17 +385,9 @@ init -2 python:
                 store._tl_load_slot = _pre
                 return "load"
 
-            ## Tier 2: nearest earlier pre-save — skip replay from that menu
-            _nearest_pre = _tl_find_nearest_pre_save(
-                node_index - 1, list(_tl_context), list(_tl_history))
-            if _nearest_pre is not None:
-                _tl_log("TL jump: nearest pre-save found={}".format(_nearest_pre))
-                store._tl_load_slot = _nearest_pre
-                return "load"
-
-            ## Tier 3: nearest _ch_* post-choice save + skip replay
-            nearest = _tl_find_nearest_save(
-                node_index - 1, list(_tl_context), chap_candidates=_chap_candidates)
+            ## Tier 2: nearest save (pre or _ch_*) — whichever has the higher index wins
+            nearest = _tl_find_nearest_any_save(
+                node_index - 1, list(_tl_context), list(_tl_history), _chap_candidates)
 
             if nearest is not None:
                 _tl_log("TL jump: loading save={}".format(nearest))

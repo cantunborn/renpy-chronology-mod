@@ -42,10 +42,11 @@ Save-slot naming and jump mechanics.
 - `_tl_pre_save_slot(node_index, context, ast_key=None)` — hashed slot name for pre-menu saves (`_pre_*`); hash includes `ast_key` for sandbox-game disambiguation
 - `_tl_write_pre_save(node_index, context)` — write stripped pre-menu save via `_tl_save_no_screenshot`, 1 rollback entry
 - `_tl_find_pre_save(node_index, context, ast_key=None)` — check if an exact pre-save exists for this node+context+ast_key
-- `_tl_find_nearest_pre_save(target_index, context, history=None)` — scan for the highest-index `_pre_*` file ≤ target that matches context+ast_key
+- `_tl_find_nearest_pre_save(target_index, context, history=None, _meta=None)` — scan for the highest-index `_pre_*` file ≤ target that matches context+ast_key; populates `_meta["index"]` when provided
 - `_tl_chap_end_slot_name(label, context, after_index)` — slot name for chapter-end saves
-- `_tl_find_nearest_save(target_index, context)` — scan save dir for best matching `_ch_*` fallback save
-- `_tl_begin_jump(node_index, option_index)` — initiate jump; 3-tier: Tier 1 exact pre-save, Tier 2 nearest pre-save, Tier 3 nearest `_ch_*`
+- `_tl_find_nearest_save(target_index, context, _meta=None)` — scan save dir for best matching `_ch_*` fallback save; populates `_meta["index"]` when provided
+- `_tl_find_nearest_any_save(target_index, context, history, chap_candidates)` — compete both pools via `_meta` index; return higher-index slot
+- `_tl_begin_jump(node_index, option_index)` — initiate jump; 2-tier: Tier 1 exact pre-save, Tier 2 `_tl_find_nearest_any_save` (best of pre or `_ch_*`)
 - `_tl_begin_label_jump(label)` — jump to a chapter-end save by label
 - `_tl_cancel_replay()` — abort in-progress replay; snapshots thumbnails to `renpy.game._tl_thumb_cache`
 - `_tl_save_slot`, `_tl_should_save` — **legacy**; `_ch_*` slot naming, kept for fallback load of old saves

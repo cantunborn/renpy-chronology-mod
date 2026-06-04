@@ -7,6 +7,11 @@ that is present in the codebase but not yet committed.
 
 ## Unreleased
 
+### Fix: jump tier preference — compete pre-saves and _ch_* saves by index
+
+- **`backend/tl_saveload.rpy`** — added `_tl_find_nearest_any_save(target_index, context, history, chap_candidates)` that runs both `_tl_find_nearest_pre_save` and `_tl_find_nearest_save` and picks whichever returned the higher index. Both finders now accept `_meta=None`; when provided, they populate `_meta["index"]` with the winning slot's index so the caller can compare across pools. Chapter-end saves (slot names not index-parseable) are handled correctly since `_tl_find_nearest_save` tracks their index internally. Tiers 2 and 3 in `_tl_begin_jump` collapsed into a single Tier 2 call to `_tl_find_nearest_any_save`.
+- **Why**: previously any pre-save beat any `_ch_*` save regardless of proximity. Playthroughs that only have `_ch_*` checkpoints (pre-update saves) would load a distant pre-save instead of a closer `_ch_*` save, causing unnecessarily long replay.
+
 ### Perf: move ghost node AST fields to persistent cache — reduces rollback log bloat
 
 - **`backend/tl_ghost_logic.rpy`** — added `_tl_ghost_ast(ast_key)` helper that reads from `persistent._tl_ghost_node_cache`. Modified `_tl_emit_ghost_cluster` to split the appended dict: AST-derived fields (`conditions`, `seen_fns`, `affecting_vars`, `_regions`) are written to `persistent._tl_ghost_node_cache[str(ast_key)]` once (with invalidation check); `store._tl_ghost_nodes` now appends a slim dict with only 4 runtime fields (`ast_key`, `taken_index`, `branch_imgs`, `cluster_with_prev`). Dropped `type` ("branch" constant) and `member_ast_keys` (logging only) from the store dict entirely.
