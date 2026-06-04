@@ -7,6 +7,10 @@ that is present in the codebase but not yet committed.
 
 ## Unreleased
 
+### Perf: _tl_find_nearest_pre_save — history-first lookup, O(N) with early exit
+
+- **`backend/tl_saveload.rpy`** — when `history` is provided, the function now sorts history descending by index and checks `os.path.exists` for each entry's expected slot name, breaking on first hit. Previously it did a full `os.listdir` scan and then linear-searched history for each file's ast_key: O(disk_files × history_length). New approach is O(history_length) with early exit. `history=None` falls back to the original disk scan (used by `_tl_thin_pre_saves`).
+
 ### Fix: jump tier preference — compete pre-saves and _ch_* saves by index
 
 - **`backend/tl_saveload.rpy`** — added `_tl_find_nearest_any_save(target_index, context, history, chap_candidates)` that runs both `_tl_find_nearest_pre_save` and `_tl_find_nearest_save` and picks whichever returned the higher index. Both finders now accept `_meta=None`; when provided, they populate `_meta["index"]` with the winning slot's index so the caller can compare across pools. Chapter-end saves (slot names not index-parseable) are handled correctly since `_tl_find_nearest_save` tracks their index internally. Tiers 2 and 3 in `_tl_begin_jump` collapsed into a single Tier 2 call to `_tl_find_nearest_any_save`.

@@ -42,7 +42,7 @@ Save-slot naming and jump mechanics.
 - `_tl_pre_save_slot(node_index, context, ast_key=None)` — hashed slot name for pre-menu saves (`_pre_*`); hash includes `ast_key` for sandbox-game disambiguation
 - `_tl_write_pre_save(node_index, context)` — write stripped pre-menu save via `_tl_save_no_screenshot`, 1 rollback entry
 - `_tl_find_pre_save(node_index, context, ast_key=None)` — check if an exact pre-save exists for this node+context+ast_key
-- `_tl_find_nearest_pre_save(target_index, context, history=None, _meta=None)` — scan for the highest-index `_pre_*` file ≤ target that matches context+ast_key; populates `_meta["index"]` when provided
+- `_tl_find_nearest_pre_save(target_index, context, history=None, _meta=None)` — when history provided: iterate descending by index, compute slot name, check existence — O(history_length) early exit; when history=None: disk scan with ast_key=None; populates `_meta["index"]` when provided
 - `_tl_chap_end_slot_name(label, context, after_index)` — slot name for chapter-end saves
 - `_tl_find_nearest_save(target_index, context, _meta=None)` — scan save dir for best matching `_ch_*` fallback save; populates `_meta["index"]` when provided
 - `_tl_find_nearest_any_save(target_index, context, history, chap_candidates)` — compete both pools via `_meta` index; return higher-index slot

@@ -653,6 +653,68 @@ class TestFindNearestPreSave:
 
 
 # =============================================================================
+# _tl_find_nearest_pre_save — history-first path
+# =============================================================================
+
+def _make_hist(index, ast_key=None):
+    return {"index": index, "ast_key": list(ast_key) if ast_key else None,
+            "_location": None}
+
+
+class TestFindNearestPreSaveHistoryFirst:
+    def setup_method(self):
+        assert _tl_find_nearest_pre_save is not None
+
+    def test_history_returns_highest_valid(self):
+        """History entries at 1,3,5; files at 3 and 5; target=6 → slot at 5."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)] * 6
+            make_pre_save_files(d, [(3, ctx), (5, ctx)])
+            history = [_make_hist(1), _make_hist(3), _make_hist(5)]
+            result = _tl_find_nearest_pre_save(6, ctx, history=history, save_dir=d)
+            assert result == _tl_pre_save_slot(5, ctx)
+
+    def test_history_entry_with_no_file_falls_to_lower(self):
+        """Entry at 7 has no file; entry at 4 does → slot at 4."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)] * 8
+            make_pre_save_files(d, [(4, ctx)])
+            history = [_make_hist(4), _make_hist(7)]
+            result = _tl_find_nearest_pre_save(8, ctx, history=history, save_dir=d)
+            assert result == _tl_pre_save_slot(4, ctx)
+
+    def test_history_ignores_entry_above_target(self):
+        """Entry at 7 is above target=5; file at 4 → slot at 4."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)] * 8
+            make_pre_save_files(d, [(4, ctx)])
+            history = [_make_hist(4), _make_hist(7)]
+            result = _tl_find_nearest_pre_save(5, ctx, history=history, save_dir=d)
+            assert result == _tl_pre_save_slot(4, ctx)
+
+    def test_history_with_ast_key_computes_correct_slot(self):
+        """Entry at 3 with ast_key; file written with same ast_key → found."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0), ("B", 1)]
+            ak  = ("game/loc.rpy", 42)
+            make_pre_save_files(d, [(3, ctx, ak)])
+            history = [_make_hist(3, ak)]
+            result = _tl_find_nearest_pre_save(5, ctx, history=history, save_dir=d)
+            assert result == _tl_pre_save_slot(3, ctx, ak)
+
+    def test_history_wrong_ast_key_falls_to_lower(self):
+        """Entry at 5 with wrong ast_key (file under different hash); entry at 3 correct → slot at 3."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = [("A", 0)] * 6
+            ak_correct = ("game/loc.rpy", 10)
+            ak_wrong   = ("game/loc.rpy", 99)
+            make_pre_save_files(d, [(5, ctx, ak_correct), (3, ctx, ak_correct)])
+            history = [_make_hist(3, ak_correct), _make_hist(5, ak_wrong)]
+            result = _tl_find_nearest_pre_save(6, ctx, history=history, save_dir=d)
+            assert result == _tl_pre_save_slot(3, ctx, ak_correct)
+
+
+# =============================================================================
 # _tl_find_nearest_any_save
 # =============================================================================
 

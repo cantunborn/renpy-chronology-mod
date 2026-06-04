@@ -66,51 +66,57 @@ init -2 python:
         Return the pre-menu save slot with the highest index <= target_index
         that shares the same (context prefix, ast_key) as recorded in history.
 
-        Unlike _tl_find_pre_save (exact match), this scans all _pre_* files.
-        Used as a fallback when the exact pre-save for a target menu was deleted
-        (e.g. by _tl_thin_pre_saves). The found save requires skip replay from
-        its menu index up to the target, same as _ch_* fallback saves.
+        When history is provided: iterates history descending by index, computes
+        the expected slot name directly, and checks disk existence — O(history_length)
+        with early exit. No directory scan needed.
 
-        history: list of history node dicts (from _tl_history). For each candidate
-        file at index _idx, the node's ast_key is looked up from history to compute
-        the expected hash — consistent with how _tl_pre_save_slot builds the slot.
-        If history is None or the node is not found, ast_key=None is used.
+        When history is None: falls back to a full disk scan with ast_key=None
+        (used when history is unavailable, e.g. thin_pre_saves).
         """
         import os as _os
         _root = save_dir if save_dir is not None else renpy.config.savedir
         _best_index = -1
         _best_slot  = None
-        try:
-            for _fname in _os.listdir(_root):
-                if not _fname.startswith("_pre_"):
+
+        if history:
+            for _n in sorted(history, key=lambda n: n.get("index", -1), reverse=True):
+                _idx = _n.get("index", -1)
+                if _idx < 0 or _idx > target_index:
                     continue
-                _name  = _fname.replace("-LT1.save", "").replace(".save", "")
-                _parts = _name.split("_")
-                ## ['', 'pre', '0027', 'hash']
-                if len(_parts) < 4:
-                    continue
-                try:
-                    _idx = int(_parts[2])
-                except ValueError:
-                    continue
-                if _idx > target_index:
-                    continue
-                ## Look up ast_key for this index from history
-                _hist_node = None
-                if history:
-                    for _n in history:
-                        if _n.get("index") == _idx:
-                            _hist_node = _n
-                            break
-                _ast_key      = _tl_derive_node_menu_site_key(_hist_node) if _hist_node else None
-                _expected_slot = _tl_pre_save_slot(_idx, context, _ast_key)
-                if _parts[3] != _expected_slot.split("_")[-1]:
-                    continue
-                if _idx > _best_index:
-                    _best_index = _idx
-                    _best_slot  = _name
-        except Exception as _e:
-            _tl_log("TL find_nearest_pre_save scan error: {}".format(_e))
+                _ast_key = _tl_derive_node_menu_site_key(_n)
+                _slot = _tl_pre_save_slot(_idx, context, _ast_key)
+                for _ext in ("-LT1.save", ".save"):
+                    if _os.path.exists(_os.path.join(_root, _slot + _ext)):
+                        _best_index = _idx
+                        _best_slot  = _slot
+                        break
+                if _best_slot is not None:
+                    break
+        else:
+            try:
+                for _fname in _os.listdir(_root):
+                    if not _fname.startswith("_pre_"):
+                        continue
+                    _name  = _fname.replace("-LT1.save", "").replace(".save", "")
+                    _parts = _name.split("_")
+                    ## ['', 'pre', '0027', 'hash']
+                    if len(_parts) < 4:
+                        continue
+                    try:
+                        _idx = int(_parts[2])
+                    except ValueError:
+                        continue
+                    if _idx > target_index:
+                        continue
+                    _expected_slot = _tl_pre_save_slot(_idx, context, None)
+                    if _parts[3] != _expected_slot.split("_")[-1]:
+                        continue
+                    if _idx > _best_index:
+                        _best_index = _idx
+                        _best_slot  = _name
+            except Exception as _e:
+                _tl_log("TL find_nearest_pre_save scan error: {}".format(_e))
+
         if _meta is not None:
             _meta["index"] = _best_index
         return _best_slot
