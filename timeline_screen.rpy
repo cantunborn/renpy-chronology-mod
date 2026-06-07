@@ -22,41 +22,63 @@ init python:
     def _tl_toggle(view=None):
         if not hasattr(store, "_tl_history"):
             return
-        scr = renpy.get_screen("timeline")
-        if scr:
-            current = scr.scope.get("tl_view", "cards")
-            if view is None or current == view:
-                ## Same tab key or Esc → close
-                renpy.layer_at_list([], layer="master")
-                renpy.hide_screen("timeline")
-            else:
-                ## Different tab key → switch view
-                scr.scope["tl_view"] = view
-                renpy.restart_interaction()
-        else:
-            renpy.layer_at_list([tl_layer_blur], layer="master")
-            renpy.show_screen("timeline")
-            if view is not None:
-                scr2 = renpy.get_screen("timeline")
-                if scr2:
-                    scr2.scope["tl_view"] = view
+        try:
+            _tl_log("TL toggle: view={} timeline_showing={}".format(view, bool(renpy.get_screen("timeline"))))
+            scr = renpy.get_screen("timeline")
+            if scr:
+                current = scr.scope.get("tl_view", "cards")
+                if view is None or current == view:
+                    ## Same tab key or Esc → close
+                    renpy.layer_at_list([], layer="master")
+                    renpy.hide_screen("timeline")
+                else:
+                    ## Different tab key → switch view
+                    scr.scope["tl_view"] = view
                     renpy.restart_interaction()
+            else:
+                renpy.layer_at_list([tl_layer_blur], layer="master")
+                renpy.show_screen("timeline")
+                if view is not None:
+                    scr2 = renpy.get_screen("timeline")
+                    if scr2:
+                        scr2.scope["tl_view"] = view
+                        renpy.restart_interaction()
+        except Exception as e:
+            _tl_log("TL toggle ERROR: {}".format(e))
 
 
 ## =============================================================================
-## Chronology — jump helper label
-## Called via renpy.jump() to escape screen context before loading a save.
+## Chronology — jump helper labels
+## Called via Jump() action to escape screen context before executing the jump.
+## Screens are hidden by the action list before these labels run, so no modal
+## or overlay screens are active when unfreeze/load fires.
+## Fallback order: snapshot -> pre-save -> _ch_* save.
 ## =============================================================================
 
 label _tl_do_load:
-    if _tl_load_slot:
+    if getattr(renpy.game, "_tl_pending_snap", None) is not None:
+        $ _tl_log("TL do_load: dispatching snapshot unfreeze")
+        $ _snap = renpy.game._tl_pending_snap
+        $ renpy.game._tl_pending_snap = None
+        $ _tl_unfreeze_from_snapshot(_snap)
+    elif _tl_load_slot:
+        $ _tl_log("TL do_load: dispatching load slot={}".format(_tl_load_slot))
         $ renpy.load(_tl_load_slot)
+    else:
+        $ _tl_log("TL do_load: nothing to dispatch (no snap, no slot)")
     return
 
 label _tl_do_chap_end_jump:
-    if _tl_chap_end_slot:
+    if getattr(renpy.game, "_tl_pending_snap", None) is not None:
+        $ _tl_log("TL do_chap_end_jump: dispatching snapshot unfreeze")
+        $ _snap = renpy.game._tl_pending_snap
+        $ renpy.game._tl_pending_snap = None
+        $ _tl_unfreeze_from_snapshot(_snap)
+    elif _tl_chap_end_slot:
+        $ _tl_log("TL do_chap_end_jump: dispatching load slot={}".format(_tl_chap_end_slot))
         $ renpy.load(_tl_chap_end_slot)
     else:
+        $ _tl_log("TL do_chap_end_jump: dispatching label jump={}".format(_tl_label_jump))
         $ renpy.jump(_tl_label_jump)
 
 
@@ -221,7 +243,7 @@ screen timeline():
 
                 if persistent._tl_recovery_slot:
                     button:
-                        action [Function(_tl_cancel_replay), Hide("timeline"), Jump("_tl_do_load")]
+                        action [Function(_tl_cancel_jump), Hide("timeline"), Jump("_tl_do_load")]
                         background None
                         hover_background None
                         yalign 0.5
@@ -295,24 +317,27 @@ screen timeline():
                     _tl_items = []
                     _tl_cur_row = []
                     _tl_marked_chapters = set()
-                    for _n in _tl_history:
-                        _tl_cur_row.append(_n)
-                        if len(_tl_cur_row) == _tl_cols:
-                            _tl_items.append(("row", list(_tl_cur_row)))
-                            _tl_cur_row = []
-                        if _n.get("chapter_end"):
-                            _ch = _n["chapter_end"]
-                            _tl_marked_chapters.add(_ch)
-                            if _tl_cur_row:
+                    try:
+                        for _n in _tl_history:
+                            _tl_cur_row.append(_n)
+                            if len(_tl_cur_row) == _tl_cols:
                                 _tl_items.append(("row", list(_tl_cur_row)))
                                 _tl_cur_row = []
-                            _tl_items.append(("divider", _ch, _tl_chapters.get(_ch, "")))
-                    if _tl_cur_row:
-                        _tl_items.append(("row", list(_tl_cur_row)))
-                    ## Chapters that fired before any history node (no node to mark)
-                    for _m in _tl_chapter_markers:
-                        if _m["chapter_name"] not in _tl_marked_chapters:
-                            _tl_items.append(("divider", _m["chapter_name"], _m["end_label"]))
+                            if _n.get("chapter_end"):
+                                _ch = _n["chapter_end"]
+                                _tl_marked_chapters.add(_ch)
+                                if _tl_cur_row:
+                                    _tl_items.append(("row", list(_tl_cur_row)))
+                                    _tl_cur_row = []
+                                _tl_items.append(("divider", _ch, _tl_chapters.get(_ch, "")))
+                        if _tl_cur_row:
+                            _tl_items.append(("row", list(_tl_cur_row)))
+                        ## Chapters that fired before any history node (no node to mark)
+                        for _m in _tl_chapter_markers:
+                            if _m["chapter_name"] not in _tl_marked_chapters:
+                                _tl_items.append(("divider", _m["chapter_name"], _m["end_label"]))
+                    except Exception as _build_err:
+                        _tl_log("TL screen ERROR building items: {}".format(_build_err))
 
                 frame:
                     style "tl_frame_base"
@@ -444,7 +469,7 @@ screen tl_chapter_divider(chapter_name, end_label):
         padding (0, 48, 0, 48)
         background None
         hover_background None
-        action [Function(_tl_begin_label_jump, end_label),
+        action [Function(_tl_jump, chapter_label=end_label),
                 Hide("timeline"), Jump("_tl_do_chap_end_jump")]
 
         ## Centered block: [line] [text] [line], with symmetric outer padding

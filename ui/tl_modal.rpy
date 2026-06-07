@@ -26,7 +26,7 @@ screen tl_modal_option_row(node, i, opt, m_w, opt_count):
             padding (16, 12, 16, 12)
             background None
             hover_background _tl_hover_gradient
-            action [Function(_tl_begin_jump, node["index"], i), Hide("tl_modal"), Hide("timeline"), Jump("_tl_do_load")]
+            action [Function(_tl_jump, node["index"], i), Hide("tl_modal"), Hide("timeline"), Jump("_tl_do_load")]
 
             hbox:
                 xfill True

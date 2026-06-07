@@ -30,8 +30,6 @@ init -2 python:
     TL_THUMB_WIDTH  = 320
     TL_THUMB_HEIGHT = 180
 
-    TL_SAVE_EVERY       = 10   ## write a checkpoint save every N choices
-    TL_DENSE_SAVES      = 5    ## save every choice for the first N nodes
     TL_THUMB_CACHE_MAX  = 500  ## max thumbnails (~25MB at ~50KB/thumb)
     TL_DEBUG_GHOST      = False   ## ghost synthesis detail (if-execute, clustering, branch-img, image resolution)
     TL_DEBUG_SEEN       = False   ## seen-state resolution detail (opt_seen, peek_seen)
@@ -111,9 +109,6 @@ init python:
         persistent._tl_replaying = False
     if not hasattr(persistent, "_tl_img_movie_cache") or persistent._tl_img_movie_cache is None:
         persistent._tl_img_movie_cache = {}
-    if not hasattr(persistent, "_tl_pending_shadow_path"):
-        persistent._tl_pending_shadow_path = None
-
     if not hasattr(persistent, "_tl_var_notifs_enabled") or persistent._tl_var_notifs_enabled is None:
         persistent._tl_var_notifs_enabled = False
 

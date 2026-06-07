@@ -34,6 +34,16 @@ init python:
 init python:
 
     ## ─────────────────────────────────────────────────────────────────────────
+    ## Shared test fixtures
+    ## ─────────────────────────────────────────────────────────────────────────
+
+    ## Module-level so pickle can resolve it (local classes inside functions
+    ## get a __qualname__ like func.<locals>.FakeCtx which pickle can't find).
+    class _TLFakeCtx(object):
+        current      = "_dummy_label_99999_"
+        interacting  = False
+
+    ## ─────────────────────────────────────────────────────────────────────────
     ## Micro test framework
     ## ─────────────────────────────────────────────────────────────────────────
 
@@ -475,85 +485,6 @@ init python:
             _st._tl_node_count      = saved_count
 
 
-    def _tl_test_label_jump_rollback(r):
-        """
-        _tl_begin_label_jump fallback path correctly rolls back timeline
-        variables when no chapter-end save exists.
-        """
-        s = "label_jump_rollback"
-
-        import store as _st
-        import os as _os
-
-        saved_history  = list(_st._tl_history)
-        saved_count    = _st._tl_node_count
-        saved_context  = list(_st._tl_context)
-        saved_markers  = list(_st._tl_chapter_markers)
-        saved_slot     = _st._tl_chap_end_slot
-        saved_jump     = _st._tl_label_jump
-        saved_recovery = persistent._tl_recovery_slot
-
-        try:
-            ## Set up synthetic state: 10 nodes, chapter end at after_idx=5
-            _st._tl_history  = [
-                {"index": i, "options": ["A"], "prompt": "Q", "chosen_index": 0}
-                for i in range(10)
-            ]
-            _st._tl_context  = [("Q{}".format(i), 0) for i in range(10)]
-            _st._tl_node_count = 10
-            _test_label = "_tl_test_rollback_label_99999_"
-            _st._tl_chapter_markers = [
-                {"chapter_name": "_test_ch_", "end_label": _test_label, "after_index": 5}
-            ]
-
-            ## Patch _tl_chapters so begin_label_jump can find the chapter
-            _orig_chapters = _tl_chapters.copy()
-            _tl_chapters["_test_ch_"] = _test_label
-
-            ## Ensure no chapter-end save file exists (slot doesn't exist on disk)
-            _slot = "_ch_chap_{}".format(_test_label)
-            _sd   = renpy.config.savedir
-            _save_path_lt1 = _os.path.join(_sd, "{}-LT1.save".format(_slot))
-            _save_path_reg = _os.path.join(_sd, "{}.save".format(_slot))
-            _had_lt1 = _os.path.exists(_save_path_lt1)
-            _had_reg = _os.path.exists(_save_path_reg)
-
-            ## Call the function
-            _tl_begin_label_jump(_test_label)
-
-            if _had_lt1 or _had_reg:
-                ## Save unexpectedly exists — load path taken; skip rollback checks
-                r.check(s, "save existed (skip rollback check)", True, "chapter-end save found on disk")
-            else:
-                ## Fallback path: verify rollback
-                r.check(s, "history trimmed to after_idx",
-                    len(_st._tl_history) == 5)
-                r.check(s, "node_count rolled back",
-                    _st._tl_node_count == 5)
-                r.check(s, "context trimmed to after_idx",
-                    len(_st._tl_context) == 5)
-                r.check(s, "chapter marker kept",
-                    len(_st._tl_chapter_markers) == 1)
-                r.check(s, "chap_end_slot empty (fallback)",
-                    _st._tl_chap_end_slot == "")
-                r.check(s, "label_jump set to label",
-                    _st._tl_label_jump == _test_label)
-
-        except Exception as e:
-            r.check(s, "no exception", False, str(e))
-        finally:
-            _st._tl_history        = saved_history
-            _st._tl_node_count     = saved_count
-            _st._tl_context        = saved_context
-            _st._tl_chapter_markers = saved_markers
-            _st._tl_chap_end_slot  = saved_slot
-            _st._tl_label_jump     = saved_jump
-            persistent._tl_recovery_slot = saved_recovery
-            ## Restore _tl_chapters (dict is mutated in-place in store)
-            _tl_chapters.clear()
-            _tl_chapters.update(_orig_chapters)
-
-
     def _tl_test_chap_end_slot_name(r):
         """Chapter-end save slot names include label and context hash."""
         s = "chap_end_slot_name"
@@ -575,130 +506,12 @@ init python:
 
 
     def _tl_test_shadow_path_store_defaults(r):
-        """Shadow path store and persistent variables exist with correct types."""
+        """Shadow path store variable exists with correct type."""
         s = "shadow_path_defaults"
         import store as _st
         r.check(s, "_tl_shadow_path is list or None",
             getattr(_st, "_tl_shadow_path", "MISSING") is None or
             isinstance(getattr(_st, "_tl_shadow_path", None), list))
-        r.check(s, "_tl_pending_shadow_path is list or None",
-            getattr(persistent, "_tl_pending_shadow_path", "MISSING") is None or
-            isinstance(getattr(persistent, "_tl_pending_shadow_path", None), list))
-
-
-    def _tl_test_shadow_path_set_on_jump(r):
-        """
-        _tl_begin_jump stages shadow path into persistent._tl_pending_shadow_path
-        from history nodes after the target, without touching store._tl_shadow_path
-        (which a checkpoint load would overwrite).
-        """
-        s = "shadow_path_jump"
-        import store as _st
-
-        saved_history     = list(_st._tl_history)
-        saved_count       = _st._tl_node_count
-        saved_context     = list(_st._tl_context)
-        saved_replaying   = persistent._tl_replaying
-        saved_target      = persistent._tl_replay_target
-        saved_path        = persistent._tl_replay_path
-        saved_recovery    = persistent._tl_recovery_slot
-        saved_psp         = persistent._tl_pending_shadow_path
-        saved_store_sp    = getattr(_st, "_tl_shadow_path", None)
-        saved_prev_thumb  = persistent._tl_prev_thumb
-
-        try:
-            ## Build synthetic history: 3 nodes, all resolved
-            def _mk(idx, opts, prompt, ci, loc):
-                return {"index": idx, "options": opts, "prompt": prompt,
-                    "chosen_index": ci, "_location": loc,
-                    "_choice_returns": [None, None],
-                    "thumb_bytes": None, "ast_key": None, "_rollback_id": None}
-            _st._tl_history = [
-                _mk(0, ["A", "B"], "Q0", 0, "loc0"),
-                _mk(1, ["X", "Y"], "Q1", 1, "loc1"),
-                _mk(2, ["P", "Q"], "Q2", 0, "loc2"),
-            ]
-            _st._tl_context    = [("Q0", 0), ("Q1", 1), ("Q2", 0)]
-            _st._tl_node_count = 3
-
-            ## Jump to node 0 choosing option 1 (different from original 0)
-            ## _tl_begin_jump saves recovery and returns "load" or None.
-            ## We don't actually load — just check persistent staging.
-            _tl_begin_jump(0, 1)
-
-            ## pending_shadow_path should contain nodes 1 and 2 (after the target)
-            psp = persistent._tl_pending_shadow_path
-            r.check(s, "pending_shadow_path is list", isinstance(psp, list))
-            r.check(s, "pending has 2 entries (nodes after target)", len(psp) == 2)
-            r.check(s, "entry 0 location correct", psp[0]["location"] == "loc1")
-            r.check(s, "entry 0 chosen_index correct", psp[0]["chosen_index"] == 1)
-            r.check(s, "entry 1 location correct", psp[1]["location"] == "loc2")
-            r.check(s, "entry 1 chosen_index correct", psp[1]["chosen_index"] == 0)
-
-            ## store._tl_shadow_path should NOT be set here (would be wiped by load)
-            ## It is set only in _tl_on_load after the checkpoint loads.
-            ## We just verify pending was staged, not that store was written.
-
-        except Exception as e:
-            r.check(s, "no exception", False, str(e))
-        finally:
-            _st._tl_history    = saved_history
-            _st._tl_node_count = saved_count
-            _st._tl_context    = saved_context
-            persistent._tl_replaying          = saved_replaying
-            persistent._tl_replay_target      = saved_target
-            persistent._tl_replay_path        = saved_path
-            persistent._tl_recovery_slot      = saved_recovery
-            persistent._tl_pending_shadow_path = saved_psp
-            persistent._tl_prev_thumb         = saved_prev_thumb
-            _st._tl_shadow_path               = saved_store_sp
-
-
-    def _tl_test_shadow_path_empty_after_last_node(r):
-        """
-        When jumping to the last history node, shadow path is empty → None.
-        """
-        s = "shadow_path_empty_tail"
-        import store as _st
-
-        saved_history     = list(_st._tl_history)
-        saved_count       = _st._tl_node_count
-        saved_context     = list(_st._tl_context)
-        saved_replaying   = persistent._tl_replaying
-        saved_target      = persistent._tl_replay_target
-        saved_path        = persistent._tl_replay_path
-        saved_recovery    = persistent._tl_recovery_slot
-        saved_psp         = persistent._tl_pending_shadow_path
-        saved_prev_thumb  = persistent._tl_prev_thumb
-
-        try:
-            def _mk2(idx, opts, prompt, ci, loc):
-                return {"index": idx, "options": opts, "prompt": prompt,
-                    "chosen_index": ci, "_location": loc,
-                    "_choice_returns": [None, None],
-                    "thumb_bytes": None, "ast_key": None, "_rollback_id": None}
-            _st._tl_history = [_mk2(0, ["A", "B"], "Q0", 0, "loc0")]
-            _st._tl_context    = [("Q0", 0)]
-            _st._tl_node_count = 1
-
-            _tl_begin_jump(0, 1)
-
-            psp = persistent._tl_pending_shadow_path
-            r.check(s, "pending_shadow_path is None when no nodes after target",
-                psp is None)
-
-        except Exception as e:
-            r.check(s, "no exception", False, str(e))
-        finally:
-            _st._tl_history    = saved_history
-            _st._tl_node_count = saved_count
-            _st._tl_context    = saved_context
-            persistent._tl_replaying          = saved_replaying
-            persistent._tl_replay_target      = saved_target
-            persistent._tl_replay_path        = saved_path
-            persistent._tl_recovery_slot      = saved_recovery
-            persistent._tl_pending_shadow_path = saved_psp
-            persistent._tl_prev_thumb         = saved_prev_thumb
 
 
     def _tl_test_shadow_path_consume_and_diverge(r):
@@ -713,21 +526,18 @@ init python:
 
         try:
             _st._tl_shadow_path = [
-                {"location": "loc_before", "chosen_index": 1},
-                {"location": "loc_target", "chosen_index": 0},
-                {"location": "loc_after",  "chosen_index": 1},
+                {"ast_key": ("a.rpy", 10), "chosen_index": 1},
+                {"ast_key": ("a.rpy", 20), "chosen_index": 0},
+                {"ast_key": ("a.rpy", 30), "chosen_index": 1},
             ]
 
-            ## Simulate a node at loc_target where player chose index 1 (orig was 0)
+            ## Simulate a node at ast_key (a.rpy, 20) where player chose index 1 (orig was 0)
             node = {
                 "index": 5, "options": ["A", "B"], "prompt": "Q",
-                "chosen_index": 1, "_location": "loc_target",
-                "_shadow_orig_chosen": None,
+                "chosen_index": 1, "ast_key": ("a.rpy", 20),
             }
-            ## Remove _shadow_orig_chosen=None so we test the set case
-            del node["_shadow_orig_chosen"]
 
-            new_sp, div_ci = _tl_consume_shadow_path(
+            new_sp, div_ci, _mode = _tl_consume_shadow_path(
                 _st._tl_shadow_path, node, node["chosen_index"])
 
             if div_ci is not None:
@@ -736,7 +546,7 @@ init python:
 
             r.check(s, "orig_chosen stamped", node.get("_shadow_orig_chosen") == 0)
             r.check(s, "shadow_path trimmed to tail",
-                _st._tl_shadow_path == [{"location": "loc_after", "chosen_index": 1}])
+                _st._tl_shadow_path == [{"ast_key": ("a.rpy", 30), "chosen_index": 1}])
 
         except Exception as e:
             r.check(s, "no exception", False, str(e))
@@ -753,11 +563,11 @@ init python:
 
         try:
             _st._tl_shadow_path = [
-                {"location": "loc_target", "chosen_index": 1},
+                {"ast_key": ("a.rpy", 10), "chosen_index": 1},
             ]
-            node = {"chosen_index": 1, "_location": "loc_target"}
+            node = {"chosen_index": 1, "ast_key": ("a.rpy", 10)}
 
-            new_sp, div_ci = _tl_consume_shadow_path(
+            new_sp, div_ci, _mode = _tl_consume_shadow_path(
                 _st._tl_shadow_path, node, node["chosen_index"])
 
             r.check(s, "div_ci is None for same choice", div_ci is None)
@@ -821,7 +631,7 @@ init python:
             persistent._tl_replaying    = True
             persistent._tl_replay_target = 3
 
-            renpy.save = lambda slot: save_calls.append(slot)
+            renpy.save = lambda slot, **kw: save_calls.append(slot)
 
             _tl_on_game_start()
 
@@ -839,19 +649,20 @@ init python:
 
 
     def _tl_test_on_load(r):
-        """_tl_on_load: stale-state clear and shadow-path transfer branches."""
+        """_tl_on_load: stale-state clear and shadow-path reconstruction from replay_path."""
         s = "on_load"
 
-        saved_replaying    = persistent._tl_replaying
-        saved_target       = persistent._tl_replay_target
-        saved_pending_sp   = persistent._tl_pending_shadow_path
-        saved_store_sp     = getattr(store, "_tl_shadow_path", None)
-        saved_skipping     = config.skipping
+        saved_replaying  = persistent._tl_replaying
+        saved_target     = persistent._tl_replay_target
+        saved_path       = persistent._tl_replay_path
+        saved_store_sp   = getattr(store, "_tl_shadow_path", None)
+        saved_skipping   = config.skipping
 
         try:
             ## Branch 1: stale state — replaying=True, target=None → clears replay
-            persistent._tl_replaying    = True
+            persistent._tl_replaying     = True
             persistent._tl_replay_target = None
+            persistent._tl_replay_path   = None
             store._tl_shadow_path        = None
 
             _tl_on_load()
@@ -859,61 +670,50 @@ init python:
             r.check(s, "stale: replaying cleared",
                 persistent._tl_replaying is False)
 
-            ## Branch 2: valid replay with pending shadow path
-            persistent._tl_replaying          = True
-            persistent._tl_replay_target       = 1
-            persistent._tl_pending_shadow_path = [{"location": "test.rpy", "chosen_index": 0}]
-            store._tl_shadow_path              = None
+            ## Branch 2 (menu jump): replay_path with 3 entries, target=node 1
+            ## shadow = entries with index > 1 → just index 2
+            persistent._tl_replaying     = True
+            persistent._tl_replay_target = {"node_index": 1, "option_index": 0}
+            persistent._tl_replay_path   = [
+                {"index": 0, "ast_key": ("a.rpy", 10), "chosen_index": 0},
+                {"index": 1, "ast_key": ("a.rpy", 20), "chosen_index": 1},
+                {"index": 2, "ast_key": ("a.rpy", 30), "chosen_index": 0},
+            ]
+            store._tl_shadow_path        = None
 
             _tl_on_load()
 
-            r.check(s, "shadow: store._tl_shadow_path set",
-                isinstance(store._tl_shadow_path, list) and len(store._tl_shadow_path) == 1)
-            r.check(s, "shadow: pending_shadow_path cleared",
-                persistent._tl_pending_shadow_path is None)
+            r.check(s, "menu branch: store._tl_shadow_path set",
+                isinstance(store._tl_shadow_path, list))
+            r.check(s, "menu branch: only entries after target (index > 1)",
+                len(store._tl_shadow_path) == 1 and
+                store._tl_shadow_path[0].get("index") == 2)
+
+            ## Branch 3 (chapter jump): replaying=False, target=None → all entries as shadow
+            persistent._tl_replaying     = False
+            persistent._tl_replay_target = None
+            persistent._tl_replay_path   = [
+                {"index": 5, "ast_key": ("b.rpy", 10), "chosen_index": 0},
+                {"index": 6, "ast_key": ("b.rpy", 20), "chosen_index": 1},
+            ]
+            store._tl_shadow_path        = None
+
+            _tl_on_load()
+
+            r.check(s, "chapter branch: all entries become shadow",
+                isinstance(store._tl_shadow_path, list) and
+                len(store._tl_shadow_path) == 2)
+            r.check(s, "chapter branch: replay_path cleared",
+                persistent._tl_replay_path is None)
 
         except Exception as e:
             r.check(s, "no exception", False, str(e))
         finally:
-            persistent._tl_replaying          = saved_replaying
-            persistent._tl_replay_target       = saved_target
-            persistent._tl_pending_shadow_path = saved_pending_sp
-            store._tl_shadow_path              = saved_store_sp
-            config.skipping                    = saved_skipping
-
-
-    def _tl_test_cancel_replay(r):
-        """_tl_cancel_replay clears all persistent replay fields."""
-        s = "cancel_replay"
-
-        saved_replaying  = persistent._tl_replaying
-        saved_target     = persistent._tl_replay_target
-        saved_path       = persistent._tl_replay_path
-        saved_recovery   = persistent._tl_recovery_slot
-        saved_pending_sp = persistent._tl_pending_shadow_path
-
-        try:
-            persistent._tl_replaying          = True
-            persistent._tl_replay_target       = 5
-            persistent._tl_replay_path         = [("q", 0), ("q2", 1)]
-            persistent._tl_recovery_slot       = "_ch_recovery"
-            persistent._tl_pending_shadow_path = [{"location": "a.rpy", "chosen_index": 0}]
-
-            _tl_cancel_replay()
-
-            r.check(s, "replaying cleared",      persistent._tl_replaying is False)
-            r.check(s, "replay_target cleared",  persistent._tl_replay_target is None)
-            r.check(s, "replay_path cleared",    persistent._tl_replay_path is None)
-            r.check(s, "pending_sp cleared",     persistent._tl_pending_shadow_path is None)
-
-        except Exception as e:
-            r.check(s, "no exception", False, str(e))
-        finally:
-            persistent._tl_replaying          = saved_replaying
-            persistent._tl_replay_target       = saved_target
-            persistent._tl_replay_path         = saved_path
-            persistent._tl_recovery_slot       = saved_recovery
-            persistent._tl_pending_shadow_path = saved_pending_sp
+            persistent._tl_replaying     = saved_replaying
+            persistent._tl_replay_target = saved_target
+            persistent._tl_replay_path   = saved_path
+            store._tl_shadow_path        = saved_store_sp
+            config.skipping              = saved_skipping
 
 
     def _tl_test_interact_callback_var_flush(r):
@@ -1051,185 +851,18 @@ init python:
             _fn(1, [("A", 0)]) == _fn(1, [("A", 0), ("B", 1)]))
 
 
-    def _tl_test_pre_save_written(r):
-        """Pre-save files exist on disk for history nodes."""
-        s = "pre_save_written"
-        import os
-        _find = globals().get("_tl_find_pre_save")
-        if _find is None:
-            r.check(s, "_tl_find_pre_save exists", False, "function not found")
-            return
-        _hist = getattr(store, "_tl_history", [])
-        if not _hist:
-            r.check(s, "skipped: no history yet", True, "no choices recorded")
-            return
-        _savedir = renpy.config.savedir
-        _derive = globals().get("_tl_derive_node_menu_site_key")
-        _ok_count = 0
-        _fail_count = 0
-        _max_sz = 0
-        for _n in _hist:
-            _idx = _n.get("index")
-            if _idx is None:
-                continue
-            _ast_key = _derive(_n) if _derive else None
-            _slot = _find(_idx, list(store._tl_context), _ast_key)
-            if _slot is None:
-                _fail_count += 1
-                continue
-            _ok_count += 1
-            for _ext in ("-LT1.save", ".save"):
-                _p = os.path.join(_savedir, _slot + _ext)
-                if os.path.exists(_p):
-                    _max_sz = max(_max_sz, os.path.getsize(_p))
-                    break
-        r.check(s, "at least one pre-save found", _ok_count > 0,
-                "found={} missing={}".format(_ok_count, _fail_count))
-        if _ok_count > 0:
-            _tl_log("TL pre_save_written: found={} missing={} max={} KB".format(
-                _ok_count, _fail_count, _max_sz // 1024))
-            r.check(s, "largest pre-save size", True,
-                    "max={} KB".format(_max_sz // 1024))
-
-
-    def _tl_test_read_pre_save_roots(r):
-        """
-        _tl_read_pre_save_roots reads store var snapshot from a pre-save file
-        without loading the save or mutating game state.
-        """
-        s = "read_pre_save_roots"
-        import os
-        _fn = globals().get("_tl_read_pre_save_roots")
-        if _fn is None:
-            r.check(s, "_tl_read_pre_save_roots exists", False, "function not found")
-            return
-        _find = globals().get("_tl_find_pre_save")
-        if _find is None:
-            r.check(s, "_tl_find_pre_save exists", False, "function not found")
-            return
-
-        _hist = getattr(store, "_tl_history", [])
-        if not _hist:
-            r.check(s, "skipped: no history yet", True, "no choices recorded")
-            return
-
-        _derive = globals().get("_tl_derive_node_menu_site_key")
-        _slot = None
-        for _n in _hist:
-            _idx = _n.get("index")
-            if _idx is not None:
-                _ak = _derive(_n) if _derive else None
-                _s = _find(_idx, list(store._tl_context), _ak)
-                if _s is not None:
-                    _slot = _s
-                    break
-
-        if _slot is None:
-            r.check(s, "skipped: no pre-save on disk", True, "run further to generate pre-saves")
-            return
-
-        ## Snapshot current state before call
-        _hist_before = list(_tl_history)
-
-        try:
-            _roots = _fn(_slot)
-            ## RenPy roots dict may be a subclass — use hasattr instead of isinstance
-            r.check(s, "returns dict-like", hasattr(_roots, "get"),
-                    "got {}".format(type(_roots).__name__))
-            if hasattr(_roots, "get"):
-                r.check(s, "dict is non-empty", len(_roots) > 0)
-                ## RenPy stores store vars as "store.varname" in roots
-                r.check(s, "contains store._tl_history key",
-                        "store._tl_history" in _roots)
-                _roots_hist = _roots.get("store._tl_history")
-                r.check(s, "_tl_history value is list or None",
-                        _roots_hist is None or isinstance(_roots_hist, list))
-        except Exception as _e:
-            r.check(s, "no exception", False, str(_e))
-
-        ## Verify game state unchanged
-        r.check(s, "history unchanged after call",
-                list(_tl_history) == _hist_before)
-
-
-    def _tl_test_thin_pre_saves_dry_run(r):
-        """
-        _tl_thin_pre_saves(dry_run=True) returns keep/delete lists covering all
-        pre-saves in the save directory, without deleting any files.
-        """
-        s = "thin_pre_saves_dry_run"
-        import os
-        _fn = globals().get("_tl_thin_pre_saves")
-        if _fn is None:
-            r.check(s, "_tl_thin_pre_saves exists", False, "function not found")
-            return
-
-        _savedir = renpy.config.savedir
-
-        ## Count _pre_* files before
-        try:
-            _before = set(
-                f.replace("-LT1.save", "").replace(".save", "")
-                for f in os.listdir(_savedir)
-                if f.startswith("_pre_")
-            )
-        except Exception as _e:
-            r.check(s, "savedir readable", False, str(_e))
-            return
-
-        if not _before:
-            r.check(s, "skipped: no pre-saves on disk", True,
-                    "play through more choices first")
-            return
-
-        try:
-            _keep, _delete = _fn(keep_every=5, dry_run=True)
-        except Exception as _e:
-            r.check(s, "no exception", False, str(_e))
-            return
-
-        r.check(s, "returns two lists",
-                isinstance(_keep, list) and isinstance(_delete, list))
-
-        ## After dry run, files should be unchanged
-        try:
-            _after = set(
-                f.replace("-LT1.save", "").replace(".save", "")
-                for f in os.listdir(_savedir)
-                if f.startswith("_pre_")
-            )
-        except Exception as _e:
-            r.check(s, "savedir readable after run", False, str(_e))
-            return
-
-        r.check(s, "no files deleted in dry_run",
-                _after == _before,
-                "before={} after={}".format(len(_before), len(_after)))
-
-        ## keep + delete should partition the pre-save set
-        _reported = set(_keep) | set(_delete)
-        r.check(s, "keep+delete covers all pre-saves",
-                _before.issubset(_reported),
-                "missing={}".format(_before - _reported))
-        r.check(s, "no overlap between keep and delete",
-                len(set(_keep) & set(_delete)) == 0)
-
-        _tl_log("TL thin_pre_saves test: keep={} delete={} total={}".format(
-            len(_keep), len(_delete), len(_before)))
-
-
     def _tl_test_jump_uses_pre_save(r):
         """
-        _tl_begin_jump picks up the exact pre-save for the target menu.
-        Reads _tl_load_slot after a simulated jump setup (no actual load).
-        Skipped if fewer than 2 choices recorded (need a past menu to jump to).
+        _tl_jump picks up the exact pre-save for the target menu (v2 fallback path).
+        Only tests nodes WITHOUT a snapshot — those fall through to the pre-save path.
+        Nodes with snapshots take the synthetic path (unfreeze, never returns here).
+        Skipped if no such node has a pre-save on disk.
         """
         s = "jump_uses_pre_save"
-        _begin_jump = globals().get("_tl_begin_jump")
-        _find       = globals().get("_tl_find_pre_save")
-        _derive     = globals().get("_tl_derive_node_menu_site_key")
-        if _begin_jump is None or _find is None:
-            r.check(s, "functions exist", False, "missing _tl_begin_jump or _tl_find_pre_save")
+        _jump  = globals().get("_tl_jump")
+        _find  = globals().get("_tl_find_pre_save")
+        if _jump is None or _find is None:
+            r.check(s, "functions exist", False, "missing _tl_jump or _tl_find_pre_save")
             return
 
         _hist = getattr(store, "_tl_history", [])
@@ -1237,29 +870,28 @@ init python:
             r.check(s, "skipped: need ≥2 choices", True, "play further first")
             return
 
-        ## Pick the oldest history node that has a pre-save on disk
+        ## Only look at nodes WITHOUT a snapshot — those fall through to the pre-save path.
         _target = None
         for _n in _hist[:-1]:
             _idx = _n.get("index")
-            if _idx is None:
+            if _idx is None or _tl_get_menu_snapshot(_idx) is not None:
                 continue
-            _ak = _derive(_n) if _derive else None
+            _ak = _tl_derive_node_menu_site_key(_n) if _tl_derive_node_menu_site_key else None
             if _find(_idx, list(store._tl_context), _ak) is not None:
                 _target = _n
                 break
 
         if _target is None:
-            r.check(s, "skipped: no pre-save found for any past menu", True,
-                    "run Shift+F9 after playing to menu 2+")
+            r.check(s, "skipped: no no-snapshot node with pre-save on disk", True,
+                    "all nodes have snapshots (synthetic path) or no pre-save found")
             return
 
-        _target_idx = _target["index"]
+        _target_idx     = _target["index"]
         _prev_load_slot = getattr(store, "_tl_load_slot", None)
         _prev_replaying = getattr(persistent, "_tl_replaying", False)
+        _prev_recovery  = persistent._tl_recovery_slot
         try:
-            _result = _begin_jump(_target_idx, 0)
-            r.check(s, "begin_jump returns 'load'", _result == "load",
-                    "got {}".format(_result))
+            _tl_jump(_target_idx, 0)
             _slot = getattr(store, "_tl_load_slot", None)
             r.check(s, "load_slot is a pre-save slot",
                     _slot is not None and _slot.startswith("_pre_"),
@@ -1268,8 +900,423 @@ init python:
                     _slot is not None and "_pre_{:04d}_".format(_target_idx) in _slot,
                     "slot={} target_idx={}".format(_slot, _target_idx))
         finally:
-            store._tl_load_slot = _prev_load_slot
-            persistent._tl_replaying = _prev_replaying
+            store._tl_load_slot       = _prev_load_slot
+            persistent._tl_replaying  = _prev_replaying
+            persistent._tl_recovery_slot = _prev_recovery
+
+
+    ## ─────────────────────────────────────────────────────────────────────────
+    ## Synthetic jump tests
+    ## ─────────────────────────────────────────────────────────────────────────
+
+    def _tl_test_cache_not_in_get_roots(r):
+        """
+        Snapshot cache lives on renpy.game.log, not in store, so it never
+        appears in get_roots() and cannot create a recursive pickle cycle.
+        Also validates that cached entries have the expected structure.
+        """
+        s = "cache_not_in_get_roots"
+
+        cache = getattr(renpy.game.log, "_tl_snapshot_cache", None)
+        r.check(s, "cache exists on log", cache is not None,
+                "play through a menu first")
+        if cache is None:
+            return
+
+        roots = renpy.game.log.get_roots()
+        r.check(s, "store._tl_snapshot_cache not in roots",
+                "store._tl_snapshot_cache" not in roots)
+        r.check(s, "cache object not a root value",
+                not any(v is cache for v in roots.values()))
+
+        menu_snaps = cache.get("menu", {})
+        chap_snaps = cache.get("chapter", {})
+        r.check(s, "cache has entries", len(menu_snaps) + len(chap_snaps) > 0,
+                "menu={} chapter={}".format(len(menu_snaps), len(chap_snaps)))
+
+        label_bad = []
+        for idx, snap in menu_snaps.items():
+            _roots = snap.get("roots") if hasattr(snap, "get") else None
+            _ctx   = snap.get("context") if hasattr(snap, "get") else None
+            r.check(s, "menu[{}] roots non-empty dict".format(idx),
+                    hasattr(_roots, "items") and bool(_roots),
+                    "snap_type={} roots_type={} roots_len={}".format(
+                        type(snap).__name__,
+                        type(_roots).__name__,
+                        len(_roots) if hasattr(_roots, "__len__") else "N/A"))
+            r.check(s, "menu[{}] context not None".format(idx),
+                    _ctx is not None)
+            if _ctx is not None:
+                cur = getattr(_ctx, "current", None)
+                if not renpy.game.script.has_label(cur):
+                    label_bad.append((idx, cur))
+        for lbl, snap in chap_snaps.items():
+            _cr = snap.get("roots") if hasattr(snap, "get") else None
+            r.check(s, "chapter['{}'] roots non-empty dict".format(lbl),
+                    hasattr(_cr, "items") and bool(_cr))
+            r.check(s, "chapter['{}'] context not None".format(lbl),
+                    snap.get("context") is not None if hasattr(snap, "get") else False)
+
+        r.check(s, "all menu snapshot contexts resolve via has_label",
+                len(label_bad) == 0, "bad={}".format(label_bad))
+        _tl_log("TL cache_not_in_get_roots: menu={} chapter={} label_bad={}".format(
+            len(menu_snaps), len(chap_snaps), label_bad))
+
+
+    def _tl_test_cache_transfer(r):
+        """
+        _tl_transfer_snapshot_cache copies the cache from renpy.game.log to a
+        fresh RollbackLog so it survives synthetic jumps (which replace the log).
+        """
+        s = "cache_transfer"
+        try:
+            import renpy.rollback as rb_mod
+        except ImportError:
+            r.check(s, "skipped: no renpy.rollback", True)
+            return
+
+        saved_cache = getattr(renpy.game.log, "_tl_snapshot_cache", None)
+        fake_cache  = _tl_make_cache()
+        fake_cache["menu"][99]          = "sentinel"
+        fake_cache["chapter"]["lbl99"]  = "sentinel2"
+        renpy.game.log._tl_snapshot_cache = fake_cache
+
+        try:
+            new_log = rb_mod.RollbackLog()
+            _tl_transfer_snapshot_cache(new_log)
+            transferred = getattr(new_log, "_tl_snapshot_cache", None)
+            r.check(s, "cache copied to new_log", transferred is fake_cache)
+            r.check(s, "menu entry preserved",
+                    transferred is not None and
+                    transferred.get("menu", {}).get(99) == "sentinel")
+            r.check(s, "chapter entry preserved",
+                    transferred is not None and
+                    transferred.get("chapter", {}).get("lbl99") == "sentinel2")
+        finally:
+            if saved_cache is not None:
+                renpy.game.log._tl_snapshot_cache = saved_cache
+            elif hasattr(renpy.game.log, "_tl_snapshot_cache"):
+                del renpy.game.log._tl_snapshot_cache
+
+
+    def _tl_test_unfreeze_builds_rollback_log(r):
+        """
+        _tl_unfreeze_from_snapshot builds a RollbackLog with exactly 1 entry.
+        The entry must have hard_checkpoint=True, checkpoint=True, stores={}, objects=[],
+        and context matching the snapshot. Verified by monkeypatching RollbackLog.unfreeze.
+        """
+        s = "unfreeze_builds_rollback_log"
+
+        class _SentinelError(Exception):
+            pass
+
+        try:
+            try:
+                import renpy.rollback as rb_mod
+            except ImportError:
+                import renpy.python as rb_mod
+        except Exception as e:
+            r.check(s, "rollback module importable", False, str(e))
+            return
+
+        RollbackLog = rb_mod.RollbackLog
+        captured    = []
+
+        def mock_unfreeze(self, roots, label):
+            captured.append(self)
+            raise _SentinelError("intercepted")
+
+        fake_ctx  = _TLFakeCtx()
+        fake_snap = {"roots": {"store._tl_history": []}, "context": fake_ctx}
+
+        saved_unfreeze_method = RollbackLog.unfreeze
+        try:
+            RollbackLog.unfreeze = mock_unfreeze
+
+            try:
+                _tl_unfreeze_from_snapshot(fake_snap)
+            except _SentinelError:
+                pass
+            except Exception as e:
+                r.check(s, "no unexpected exception", False, str(e))
+                return
+
+            r.check(s, "unfreeze called once",     len(captured) == 1)
+            if not captured:
+                return
+
+            log_inst = captured[0]
+            r.check(s, "log has 1 entry",          len(log_inst.log) == 1)
+            r.check(s, "rollback_limit is 1",      log_inst.rollback_limit == 1)
+
+            if not log_inst.log:
+                return
+            rb = log_inst.log[0]
+            r.check(s, "rb.checkpoint=True",        rb.checkpoint is True)
+            r.check(s, "rb.hard_checkpoint=True",   rb.hard_checkpoint is True)
+            r.check(s, "rb.stores={}",              rb.stores == {})
+            r.check(s, "rb.objects=[]",             rb.objects == [])
+            r.check(s, "rb.context is copy not original", rb.context is not fake_ctx)
+            r.check(s, "rb.context.interacting is False",  getattr(rb.context, "interacting", "MISSING") is False)
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            RollbackLog.unfreeze = saved_unfreeze_method
+
+
+    def _tl_test_snapshot_ctx_isolation(r):
+        """
+        Snapshot ctx must be isolated from Ren'Py's post-unfreeze mutations.
+        After unfreeze, Ren'Py mutates rb.context (the deepcopy) in place.
+        The original snap["context"] must stay clean so a second jump gets
+        ctx.interacting=False regardless of what happened after the first jump.
+        """
+        import copy as _copy
+        s = "snapshot_ctx_isolation"
+
+        fake_ctx      = _TLFakeCtx()
+        fake_ctx.interacting = False
+        snap          = {"roots": {}, "context": fake_ctx}
+
+        # simulate first unfreeze: deepcopy ctx, then ren'py mutates the copy
+        ctx1 = _copy.deepcopy(snap["context"])
+        ctx1.interacting = True
+
+        r.check(s, "snap ctx unaffected by first-unfreeze mutation",
+                snap["context"].interacting is False)
+
+        # simulate second unfreeze: deepcopy again must give clean ctx
+        ctx2 = _copy.deepcopy(snap["context"])
+        r.check(s, "second unfreeze ctx.interacting clean",
+                ctx2.interacting is False)
+
+        r.check(s, "ctx1 and ctx2 are distinct objects", ctx1 is not ctx2)
+
+
+    ## ── v2 tests ────────────────────────────────────────────────────────────
+
+    def _tl_test_jump_staging(r):
+        """
+        _tl_jump(node_index, option_index) stages replay_path with ast_key entries
+        and sets replaying=True. Entries after the target become the shadow on next load.
+        """
+        s = "jump_staging"
+        import store as _st
+
+        def _mk(idx, ci, ak):
+            return {"index": idx, "options": ["A", "B"], "prompt": "Q",
+                    "chosen_index": ci, "ast_key": ak, "_location": None,
+                    "thumb_bytes": None, "_rollback_id": None}
+
+        saved_history    = list(_st._tl_history)
+        saved_count      = _st._tl_node_count
+        saved_context    = list(_st._tl_context)
+        saved_replaying  = persistent._tl_replaying
+        saved_target     = persistent._tl_replay_target
+        saved_path       = persistent._tl_replay_path
+        saved_recovery   = persistent._tl_recovery_slot
+        saved_prev_thumb = persistent._tl_prev_thumb
+
+        try:
+            _st._tl_history = [
+                _mk(0, 0, ("a.rpy", 10)),
+                _mk(1, 1, ("a.rpy", 20)),
+                _mk(2, 0, ("a.rpy", 30)),
+            ]
+            _st._tl_context    = [("Q0", 0), ("Q1", 1), ("Q2", 0)]
+            _st._tl_node_count = 3
+
+            _tl_jump(0, 1)
+
+            r.check(s, "replaying=True", persistent._tl_replaying is True)
+            r.check(s, "replay_target set",
+                isinstance(persistent._tl_replay_target, dict) and
+                persistent._tl_replay_target.get("node_index") == 0 and
+                persistent._tl_replay_target.get("option_index") == 1)
+            rp = persistent._tl_replay_path
+            r.check(s, "replay_path is list", isinstance(rp, list))
+            r.check(s, "replay_path has entries", len(rp) >= 1)
+            r.check(s, "replay_path entries have ast_key",
+                all("ast_key" in e for e in rp))
+            r.check(s, "recovery_slot staged",
+                persistent._tl_recovery_slot is not None)
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            _st._tl_history              = saved_history
+            _st._tl_node_count           = saved_count
+            _st._tl_context              = saved_context
+            persistent._tl_replaying     = saved_replaying
+            persistent._tl_replay_target = saved_target
+            persistent._tl_replay_path   = saved_path
+            persistent._tl_recovery_slot = saved_recovery
+            persistent._tl_prev_thumb    = saved_prev_thumb
+
+
+    def _tl_test_jump_empty_shadow(r):
+        """
+        When jumping to the last history node, no entries follow it in replay_path,
+        so the shadow path reconstructed in _tl_on_load will be None.
+        """
+        s = "jump_empty_shadow"
+        import store as _st
+
+        def _mk2(idx, ci, ak):
+            return {"index": idx, "options": ["A", "B"], "prompt": "Q",
+                    "chosen_index": ci, "ast_key": ak, "_location": None,
+                    "thumb_bytes": None, "_rollback_id": None}
+
+        saved_history    = list(_st._tl_history)
+        saved_count      = _st._tl_node_count
+        saved_context    = list(_st._tl_context)
+        saved_replaying  = persistent._tl_replaying
+        saved_target     = persistent._tl_replay_target
+        saved_path       = persistent._tl_replay_path
+        saved_recovery   = persistent._tl_recovery_slot
+        saved_prev_thumb = persistent._tl_prev_thumb
+
+        try:
+            _st._tl_history    = [_mk2(0, 0, ("a.rpy", 10))]
+            _st._tl_context    = [("Q0", 0)]
+            _st._tl_node_count = 1
+
+            _tl_jump(0, 1)
+
+            rp = persistent._tl_replay_path
+            target_idx = persistent._tl_replay_target.get("node_index", -1) if isinstance(persistent._tl_replay_target, dict) else -1
+            shadow_entries = [e for e in (rp or []) if e.get("index", -1) > target_idx]
+            r.check(s, "no shadow entries after last node", len(shadow_entries) == 0)
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            _st._tl_history              = saved_history
+            _st._tl_node_count           = saved_count
+            _st._tl_context              = saved_context
+            persistent._tl_replaying     = saved_replaying
+            persistent._tl_replay_target = saved_target
+            persistent._tl_replay_path   = saved_path
+            persistent._tl_recovery_slot = saved_recovery
+            persistent._tl_prev_thumb    = saved_prev_thumb
+
+
+    def _tl_test_cancel_jump(r):
+        """_tl_cancel_jump clears all persistent replay fields and sets load slot."""
+        s = "cancel_jump"
+
+        saved_replaying  = persistent._tl_replaying
+        saved_target     = persistent._tl_replay_target
+        saved_path       = persistent._tl_replay_path
+        saved_recovery   = persistent._tl_recovery_slot
+        saved_sj         = getattr(persistent, "_tl_synthetic_jump", False)
+        saved_load_slot  = getattr(store, "_tl_load_slot", "")
+
+        try:
+            persistent._tl_replaying          = True
+            persistent._tl_replay_target      = {"node_index": 5, "option_index": 0}
+            persistent._tl_replay_path        = [{"index": 6, "ast_key": ("a.rpy", 10), "chosen_index": 0}]
+            persistent._tl_recovery_slot      = "_ch_recovery"
+            persistent._tl_synthetic_jump     = True
+
+            slot = _tl_cancel_jump()
+
+            r.check(s, "replaying cleared",     persistent._tl_replaying is False)
+            r.check(s, "replay_target cleared", persistent._tl_replay_target is None)
+            r.check(s, "replay_path cleared",   persistent._tl_replay_path is None)
+            r.check(s, "returns recovery slot", slot == "_ch_recovery")
+            r.check(s, "_tl_load_slot set",     store._tl_load_slot == "_ch_recovery")
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            persistent._tl_replaying      = saved_replaying
+            persistent._tl_replay_target  = saved_target
+            persistent._tl_replay_path    = saved_path
+            persistent._tl_recovery_slot  = saved_recovery
+            persistent._tl_synthetic_jump = saved_sj
+            store._tl_load_slot           = saved_load_slot
+
+
+    def _tl_test_jump_chapter_staging(r):
+        """
+        _tl_jump(chapter_label=label) stages replaying=False and replay_path with
+        post-chapter entries, signaling _tl_on_load to use them as shadow directly.
+        """
+        s = "jump_chapter_staging"
+        import store as _st
+
+        def _mk3(idx, ci, ak):
+            return {"index": idx, "options": ["A", "B"], "prompt": "Q",
+                    "chosen_index": ci, "ast_key": ak, "_location": None,
+                    "thumb_bytes": None, "_rollback_id": None}
+
+        test_label   = "_tl_test_chap_v2_sentinel_"
+        test_chapter = "_tl_test_chap_v2_ch_"
+
+        saved_markers    = list(_st._tl_chapter_markers)
+        saved_chapters   = _tl_chapters.copy()
+        saved_history    = list(_st._tl_history)
+        saved_context    = list(_st._tl_context)
+        saved_count      = _st._tl_node_count
+        saved_replaying  = persistent._tl_replaying
+        saved_target     = persistent._tl_replay_target
+        saved_path       = persistent._tl_replay_path
+        saved_recovery   = persistent._tl_recovery_slot
+        saved_pending    = getattr(renpy.game, "_tl_pending_snap", None)
+        saved_chap_cache = _tl_get_snapshot_cache()["chapter"].copy()
+
+        ## Stage a fake snapshot for test_label so _tl_jump takes the snapshot
+        ## path (sets pending_snap + returns) rather than the "no slot" cleanup
+        ## path (which calls _tl_clear_replay_state and wipes recovery_slot).
+        fake_snap = {"roots": {"_dummy": []}, "context": _TLFakeCtx()}
+
+        try:
+            _st._tl_history = [
+                _mk3(0, 0, ("a.rpy", 10)),
+                _mk3(1, 1, ("a.rpy", 20)),
+                _mk3(2, 0, ("a.rpy", 30)),
+            ]
+            _st._tl_context    = [("Q0", 0), ("Q1", 1), ("Q2", 0)]
+            _st._tl_node_count = 3
+            _st._tl_chapter_markers = [
+                {"chapter_name": test_chapter, "end_label": test_label, "after_index": 1}
+            ]
+            _tl_chapters[test_chapter] = test_label
+            _tl_get_snapshot_cache()["chapter"][test_label] = fake_snap
+
+            _tl_jump(chapter_label=test_label)
+
+            r.check(s, "replaying=False (chapter shadow signal)",
+                persistent._tl_replaying is False)
+            r.check(s, "replay_target=None",
+                persistent._tl_replay_target is None)
+            rp = persistent._tl_replay_path
+            r.check(s, "replay_path set or None",
+                rp is None or isinstance(rp, list))
+            if isinstance(rp, list):
+                r.check(s, "replay_path entries have index >= after_index",
+                    all(e.get("index", -1) >= 1 for e in rp))
+            r.check(s, "recovery_slot staged",
+                persistent._tl_recovery_slot is not None)
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            _st._tl_history              = saved_history
+            _st._tl_context              = saved_context
+            _st._tl_node_count           = saved_count
+            _st._tl_chapter_markers      = saved_markers
+            persistent._tl_replaying     = saved_replaying
+            persistent._tl_replay_target = saved_target
+            persistent._tl_replay_path   = saved_path
+            persistent._tl_recovery_slot = saved_recovery
+            renpy.game._tl_pending_snap  = saved_pending
+            _tl_get_snapshot_cache()["chapter"].clear()
+            _tl_get_snapshot_cache()["chapter"].update(saved_chap_cache)
+            _tl_chapters.clear()
+            _tl_chapters.update(saved_chapters)
 
 
     def _tl_run_tests():
@@ -1288,24 +1335,25 @@ init python:
         _tl_test_validate_history(r)
         _tl_test_chapter_store_defaults(r)
         _tl_test_chapter_marker_dedup(r)
-        _tl_test_label_jump_rollback(r)
         _tl_test_chap_end_slot_name(r)
         _tl_test_shadow_path_store_defaults(r)
-        _tl_test_shadow_path_set_on_jump(r)
-        _tl_test_shadow_path_empty_after_last_node(r)
         _tl_test_shadow_path_consume_and_diverge(r)
         _tl_test_shadow_path_same_choice_no_diverge(r)
         _tl_test_validate_shadow_path_corruption(r)
         _tl_test_on_game_start(r)
         _tl_test_on_load(r)
-        _tl_test_cancel_replay(r)
         _tl_test_interact_callback_var_flush(r)
         _tl_test_log_truncation(r)
         _tl_test_pre_save_slot_format(r)
-        _tl_test_pre_save_written(r)
-        _tl_test_read_pre_save_roots(r)
         _tl_test_jump_uses_pre_save(r)
-        _tl_test_thin_pre_saves_dry_run(r)
+        _tl_test_cache_not_in_get_roots(r)
+        _tl_test_cache_transfer(r)
+        _tl_test_unfreeze_builds_rollback_log(r)
+        _tl_test_snapshot_ctx_isolation(r)
+        _tl_test_jump_staging(r)
+        _tl_test_jump_empty_shadow(r)
+        _tl_test_cancel_jump(r)
+        _tl_test_jump_chapter_staging(r)
         # Write results to debug.txt (renpy-chronology-mod/debug.txt via _tl_log)
         _tl_log("=" * 60)
         _tl_log("CHRONOLOGY TEST RUN")

@@ -28,7 +28,6 @@ _persistent = types.SimpleNamespace(
     _tl_thumb_cache={},
     _tl_asset_thumb_cache={},
     _tl_img_movie_cache={},
-    _tl_pending_shadow_path=None,
     _tl_menu_scene_map={},
     _tl_scene_map_version=3,
     _tl_recovery_slot=None,

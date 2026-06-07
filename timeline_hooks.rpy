@@ -42,26 +42,34 @@ init -1 python:
         except Exception as e:
             _tl_log("TL location lookup failed: {}".format(e))
 
-        ## Write a pre-menu stripped save (no screenshot, 1 rollback entry).
-        ## Landing exactly at menu N means zero-skip jumps — _tl_store_wrapper
-        ## intercepts the menu immediately and auto-selects the target option.
-        ## ast_key is included in the hash so sandbox games where different menus
-        ## share the same (node_index, context prefix) get distinct slot names.
+        ## Snapshot for synthetic jump — captured before the menu fires so get_roots()
+        ## does not yet include this node. Stored in renpy.game.log._tl_snapshot_cache
+        ## (not in the store) so it travels with every save without appearing in roots.
+        snap = None
         if not persistent._tl_replaying:
-            _tl_write_pre_save(_tl_node_count, list(_tl_context), ast_key)
-
-        if not _tl_branch_id:
-            _tl_branch_id  = _tl_new_branch_id()
-            _tl_node_count = 0
-            ## Write the game-start save right before the first menu fires.
-            ## This is the earliest safe point — used as ultimate fallback
-            ## for jumping to node 0.
             try:
-                import os as _os
-                if not _os.path.exists(_os.path.join(renpy.config.savedir, "_ch_start-LT1.save")):
-                    _tl_save_no_screenshot("_ch_start")
-            except Exception as e:
-                _tl_log("TL ERROR _ch_start write failed: {}".format(e))
+                snap = _tl_capture_snapshot()
+                _tl_log("TL snapshot: idx={} ctx={} roots_keys={}".format(
+                    _tl_node_count,
+                    getattr(snap["context"], "current", "?"),
+                    len(snap["roots"])
+                ))
+            except Exception as snap_e:
+                _tl_log("TL snapshot ERROR idx={}: {}".format(_tl_node_count, snap_e))
+
+
+        # if not _tl_branch_id:
+        #     _tl_branch_id  = _tl_new_branch_id()
+        #     _tl_node_count = 0
+        #     ## Write the game-start save right before the first menu fires.
+        #     ## This is the earliest safe point — used as ultimate fallback
+        #     ## for jumping to node 0.
+        #     try:
+        #         import os as _os
+        #         if not _os.path.exists(_os.path.join(renpy.config.savedir, "_ch_start-LT1.save")):
+        #             _tl_save_no_screenshot("_ch_start")
+        #     except Exception as e:
+        #         _tl_log("TL ERROR _ch_start write failed: {}".format(e))
 
         prompt      = ""
         valid_items = []
@@ -176,7 +184,9 @@ init -1 python:
                 _tl_log("TL movie thumb fallback: ast_key={} img_name={}".format(ast_key, node["img_name"]))
 
 
-        _tl_history    = _tl_history + [node]
+        _tl_history = _tl_history + [node]
+        if snap is not None:
+            _tl_cache_menu_snapshot(node["index"], snap)
         _tl_node_count += 1
 
         ## Snapshot all route vars (including None) for next-menu var-change detection.
@@ -327,8 +337,7 @@ init -1 python:
                         bool(_cur_loc), _tl_node_menu_site_key(node)))
                     if _cur_loc:
                         try:
-                            _match_mode = _tl_shadow_match_mode(store._tl_shadow_path, node)
-                            _new_sp, _div_ci = _tl_consume_shadow_path(
+                            _new_sp, _div_ci, _match_mode = _tl_consume_shadow_path(
                                 store._tl_shadow_path, node, node.get("chosen_index"))
                             if _new_sp != store._tl_shadow_path:  ## matched — update path
                                 if _div_ci is not None:
@@ -372,27 +381,57 @@ init python:
             _tl_log("TL ERROR initial save failed: {}".format(e))
 
     def _tl_on_load():
+        _tl_init_snapshot_cache()
+
         ## Only clear if replaying is True but target is None — stale state
         ## from a crashed session. If both are set, this is a valid replay load
         ## and we must NOT clear or menus will fire with replaying=False and
         ## take fresh screenshots.
+        is_synthetic = getattr(persistent, "_tl_synthetic_jump", False)
+        if is_synthetic:
+            persistent._tl_synthetic_jump = False
+            try:
+                for scr in renpy.config.overlay_screens:
+                    if renpy.display.screen.get_screen(scr) is not None:
+                        renpy.display.screen.hide_screen(scr)
+                _tl_log("TL on_load: overlay screens hidden after snapshot jump")
+            except Exception as e:
+                _tl_log("TL on_load: overlay hide failed: {}".format(e))
+
         if persistent._tl_replaying and persistent._tl_replay_target is None:
             _tl_log("TL stale replay state cleared on load")
             _tl_clear_replay_state()
         elif persistent._tl_replaying:
-            _tl_log("TL replay resuming, target={}".format(persistent._tl_replay_target))
-            ## Re-enable skip after load — config resets on load so we
-            ## must set it again here. Not needed for rollback path since
-            ## rollback doesn't trigger after_load_callbacks.
-            config.skipping = "fast"
-            ## Transfer shadow path from persistent staging into the store now that
-            ## the checkpoint load is complete (store vars were overwritten by load).
-            if persistent._tl_pending_shadow_path is not None:
-                store._tl_shadow_path = persistent._tl_pending_shadow_path
-                persistent._tl_pending_shadow_path = None
-                renpy.save_persistent()
-                _tl_log("TL on_load: store._tl_shadow_path set count={}".format(
-                    len(store._tl_shadow_path) if isinstance(store._tl_shadow_path, list) else store._tl_shadow_path))
+            _tl_log("TL on_load: path={} target={} replay_path_len={}".format(
+                "synthetic" if is_synthetic else "pre-save",
+                persistent._tl_replay_target,
+                len(persistent._tl_replay_path or [])
+            ))
+            if not is_synthetic:
+                ## Pre-save path: re-enable skip to fast-forward to target.
+                ## Synthetic path lands directly at target — no skip needed.
+                config.skipping = "fast"
+        elif persistent._tl_recovery_slot and not persistent._tl_replay_path:
+            ## Jump completed (target reached), but user saved and reloaded before
+            ## cancelling — recovery slot is stale. Clear it so the timeline
+            ## doesn't show a cancel button for a jump that already finished.
+            _tl_log("TL on_load: stale recovery slot cleared (completed jump)")
+            _tl_clear_replay_state()
+        
+        ## Reconstruct store._tl_shadow_path from replay_path.
+        ## Menu jump: replaying=True + replay_target set → shadow = entries after target.
+        ## Chapter jump: replaying=False + replay_path set → all entries are shadow.
+        if persistent._tl_replay_path:
+            if persistent._tl_replaying and persistent._tl_replay_target:
+                target_idx = persistent._tl_replay_target["node_index"]
+                shadow = [e for e in persistent._tl_replay_path if e.get("index", -1) > target_idx]
+            else:
+                shadow = list(persistent._tl_replay_path)
+                persistent._tl_replay_path = None
+            store._tl_shadow_path = shadow or None
+            _tl_log("TL on_load: shadow_path set count={}".format(
+                len(store._tl_shadow_path) if isinstance(store._tl_shadow_path, list) else store._tl_shadow_path))
+        
         ## Write _ch_start if it doesn't exist yet.
         import os as _os
         if not _os.path.exists(_os.path.join(renpy.config.savedir, "_ch_start-LT1.save")):
@@ -441,29 +480,23 @@ init python:
             )
             if _tl_seen:
                 return
+            if not persistent._tl_replaying:
+                try:
+                    chap_snap = _tl_capture_snapshot()
+                    _tl_log("TL chapter snapshot: '{}' ctx={} roots_keys={}".format(
+                        chapter,
+                        getattr(chap_snap["context"], "current", "?"),
+                        len(chap_snap["roots"])
+                    ))
+                    _tl_cache_chapter_snapshot(label_name, chap_snap)
+                except Exception as snap_e:
+                    _tl_log("TL chapter snapshot ERROR '{}': {}".format(chapter, snap_e))
             store._tl_chapter_markers = store._tl_chapter_markers + [
-                {"chapter_name": chapter, "end_label": label_name, "after_index": after_idx}
+                {"chapter_name": chapter, "end_label": label_name,
+                    "after_index": after_idx}
             ]
             ## Mark the last history node — ties divider position to a specific node
             if store._tl_history:
                 store._tl_history[-1]["chapter_end"] = chapter
-            ## Save immediately — label callbacks fire between interactions so renpy.save()
-            ## is safe here. Deferring to _tl_interact_callback would write at the START
-            ## of the next interaction, overshooting into a menu if no dialog follows first.
-            ## Existence check: same slot = same playthrough path already saved, skip write.
-            _h6 = _tl_hashlib.md5(
-                repr(tuple(store._tl_context[:after_idx])).encode("utf-8")
-            ).hexdigest()[:6]
-            _chap_slot = "_ch_chap_{}_{}".format(label_name, _h6)
-            import os as _os
-            _chap_exists, _ = _tl_chap_slot_exists(_chap_slot)
-            if _chap_exists:
-                _tl_log("TL chapter-end save skipped (exists): {}".format(_chap_slot))
-            else:
-                try:
-                    _tl_save_no_screenshot(_chap_slot)
-                    _tl_log("TL chapter-end save: {}".format(_chap_slot))
-                except Exception as e:
-                    _tl_log("TL ERROR chapter-end save failed: {}".format(e))
             _tl_log("TL chapter end: '{}' after_index={}".format(chapter, after_idx))
         config.label_callbacks.append(_tl_chapter_label_cb)

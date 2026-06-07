@@ -68,10 +68,6 @@ init python:
         if not isinstance(getattr(_store, "_tl_shadow_path", None), (list, type(None))):
             _store._tl_shadow_path = None
 
-        ## Validate pending shadow path in persistent (transit variable, should always be list or None)
-        if not isinstance(getattr(persistent, "_tl_pending_shadow_path", None), (list, type(None))):
-            persistent._tl_pending_shadow_path = None
-
         ## Reset transient UI state — never safe to restore across sessions
         _store._tl_modal_node       = None
         _store._tl_chap_end_slot    = ""

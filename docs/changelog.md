@@ -7,6 +7,51 @@ that is present in the codebase but not yet committed.
 
 ## Unreleased
 
+### Fix: "Cannot start an interaction" error on second jump to same menu
+
+After a snapshot-based jump, Ren'Py sets the live game context to the `rb.context` object assigned during unfreeze. As gameplay continues, `rb.context.interacting` is set to `True`. Since the old code assigned `snap["context"]` directly to `rb.context` (no copy), the snapshot's context object was the same reference as the live context — it accumulated the `interacting=True` mutation and got pickled into any save made post-jump. On the next jump from such a save, `_tl_unfreeze_from_snapshot` would read `ctx.interacting=True` and pass it into the new Rollback entry, causing Ren'Py to raise "Cannot start an interaction in the middle of an interaction" during `unfreeze()`.
+
+`rollback_copy()` already sets `rv.interacting = False`, but that only applies at capture time. The mutation window is between unfreeze and the next jump.
+
+Fix: in `_tl_unfreeze_from_snapshot`, deepcopy `snap["context"]` before assigning it to `rb.context`. Each unfreeze gets an isolated copy; Ren'Py mutates the copy, not the snapshot. Additionally, `ctx.interacting = False` is set unconditionally after the copy to heal snapshots from old saves that were already corrupted.
+
+- **`backend/tl_snapshot_cache.rpy`** — `_tl_unfreeze_from_snapshot`: deepcopy ctx from snap with `interacting=False` reset; added `_tl_test_snapshot_ctx_isolation` in-game test.
+- **`timeline_tests.rpy`** — updated `_TLFakeCtx` with `interacting=False`; updated `_tl_test_unfreeze_builds_rollback_log` assertion (`rb.context is not fake_ctx`); added `_tl_test_snapshot_ctx_isolation`.
+
+### Fix: stale overlay screens after snapshot-based jump break T key and quick_menu
+
+After a snapshot-based jump, `before_restart()` (called inside `unfreeze()`) marks the live overlay ScreenDisplayables as `restarting=True` and leaves them with `phase=OLD`. These stale objects end up in the checkpoint context that gets baked into any save made during the post-jump session. When that save is loaded, `show_overlay_screens` finds the stale objects via `get_screen()` and skips `show_screen()`, leaving broken screens in place — `event()` silently drops all input and `_render()` returns empty.
+
+Fix: in `_tl_on_load`, when `persistent._tl_synthetic_jump` is True (i.e. we just landed from a snapshot unfreeze), immediately hide all `config.overlay_screens` with `immediately=True` before the first interaction. `show_overlay_screens` then finds an empty overlay and creates fresh, functional ScreenDisplayables.
+
+- **`timeline_hooks.rpy`** — `_tl_on_load`: added overlay hide loop under `is_synthetic` guard.
+- **`timeline_init.rpy`** — removed `_tl_diff_saves` diagnostic helper and its call site (added during investigation).
+
+### Cleanup: remove v1 save/jump system — snapshot-primary architecture only
+
+- **`backend/tl_saveload.rpy`** — deleted entirely. All v1 public APIs (`_tl_begin_jump`, `_tl_begin_label_jump`, `_tl_synthetic_jump`, `_tl_cancel_replay`, `_tl_find_nearest_save`, `_tl_find_nearest_pre_save`, `_tl_find_nearest_any_save`, `_tl_path_has_danger`, `_tl_write_pre_save`, `_tl_should_save`) are gone. Slot-naming helpers (`_tl_save_slot`, `_tl_pre_save_slot`, `_tl_find_pre_save`, `_tl_save_no_screenshot`) are kept in `tl_saveload.rpy` as backward-compat disk-read infrastructure.
+- **`timeline_hooks.rpy`** — removed both `TL_WRITE_PRE_SAVES`-guarded blocks: the pre-menu save write in `_tl_record_before` and the chapter-end save write in the chapter-end hook. The only disk write remaining is the recovery save in `_write_recovery()`.
+- **`timeline_init.rpy`** — removed `TL_WRITE_PRE_SAVES`, `TL_SAVE_EVERY`, and `TL_DENSE_SAVES` constants. Removed `_tl_pending_shadow_path` persistent init guard (shadow transport now via `persistent._tl_replay_path` entries).
+- **`timeline_save_hooks.rpy`** — removed `_tl_pending_shadow_path` validation from `_tl_validate_on_load`.
+- **`tests/conftest.py`** — removed `_tl_pending_shadow_path` from persistent stub.
+- **`tests/test_saveload.py`** — deleted 7 skipped v1-only test classes (`TestFindNearestSave`, `TestContextAccumulation`, `TestFindNearestSaveDensePattern`, `TestFindNearestPreSave`, `TestFindNearestPreSaveHistoryFirst`, `TestFindNearestAnySave`, `TestPathHasDanger`) and `TestSaveDecision`. Removed dead imports and `make_save_files` helper. All remaining classes pull from `_rpy_ns` directly. 53 tests pass.
+- **`tests/test_shadow_path.py`** — deleted 3 skipped v1-only test classes (`TestBuildShadowPath`, `TestStageShadowPath`, `TestConsumeShadowPath`).
+- **`timeline_tests.rpy`** — deleted 9 v1 in-game test functions (`_tl_test_label_jump_rollback`, `_tl_test_shadow_path_set_on_jump`, `_tl_test_shadow_path_empty_after_last_node`, `_tl_test_cancel_replay`, `_tl_test_pre_save_written`, `_tl_test_read_pre_save_roots`, `_tl_test_synthetic_jump_staging`, `_tl_test_chapter_jump_staging_synthetic`, `_tl_test_begin_jump_returns_snapshot_sentinel`) and their registry calls in `_tl_run_tests()`.
+- **Why**: v2 snapshot-primary architecture has been live-verified across all 3 jump paths. No pre-saves are written in new sessions. v1 checkpoint-save and pre-save write paths are dead code. Removing them reduces the codebase by ~900 lines and eliminates the dual-system maintenance burden.
+
+### Feat: snapshot-primary jump system (tl_saveload_v2) + shadow path redesign
+
+- **`backend/tl_saveload.rpy`** — unified jump entry point `_tl_jump(node_index, option_index, chapter_label)` for both menu and chapter jumps. Snapshot is primary; disk saves are backward-compat fallback only. Jump flow: write recovery save → stage `persistent._tl_replay_path` + `_tl_replay_target` → look up snapshot → if valid, call `_dispatch_snap`; else fall back to `_find_slot` or chapter-end slot. `_tl_cancel_jump()` replaces `_tl_cancel_replay`. `_find_slot` walks history downward from the target (Tier 1: exact pre-save at target; Tier 2: closest pre-save, `_ch_*` checkpoint, or chapter-end marker; Tier 3: `_ch_start`).
+- **`backend/tl_snapshot_cache.rpy`** — new file. `_tl_capture_snapshot()` calls `renpy.game.log.complete(False)` to flush pending store deltas, takes a `rollback_copy()` of the current context, deep-copies `ctx.info` (scene/music display state), and records `renpy.game.log.get_roots()` — the full Python object graph for rollback. Snapshots are stored on `renpy.game.log._tl_snapshot_cache` (keyed by `node_index` for menus, `label_name` for chapters), which puts them outside the store and therefore outside RenPy's `get_roots()` cycle. `_tl_unfreeze_from_snapshot()` builds a synthetic single-entry `RollbackLog` from the snapshot's roots and context, copies the cache to the new log, then calls `unfreeze()` to atomically replace the live game state — effectively teleporting the engine to the exact point of capture without replaying any script. `ctx.current` is patched to an enclosing label name when needed so `RollbackLog.rollback()` stops correctly at the synthetic entry in compiled `.rpyc` files.
+- **`backend/tl_shadow_path.rpy`** — removed `_tl_build_shadow_path`, `_tl_stage_shadow_path`, `_tl_shadow_match_mode`. `_tl_consume_shadow_path` returns a 3-tuple `(new_path, diverged_ci, match_mode)` and matches on `ast_key` with a list→tuple coercion shim for old entries.
+- **`timeline_hooks.rpy`** — `_tl_on_load` reconstructs `store._tl_shadow_path` from `persistent._tl_replay_path`: for menu jumps (`replaying=True`), entries after `target_index` become the shadow; for chapter jumps (`replaying=False`, `replay_target=None`), all entries are used as shadow and `replay_path` is cleared. Snapshot capture added to `_tl_record_before` (menu) and the chapter-end hook. `_tl_store_wrapper` unpacks the new 3-tuple from `_tl_consume_shadow_path`.
+- **`ui/tl_modal.rpy`** — `Function(_tl_begin_jump, ...)` → `Function(_tl_jump, ...)`.
+- **`timeline_screen.rpy`** — `Function(_tl_begin_label_jump, end_label)` → `Function(_tl_jump, chapter_label=end_label)`; `Function(_tl_cancel_replay)` → `Function(_tl_cancel_jump)`.
+- **`tests/test_saveload.py`** — added `TestFindSlot` (8 tests covering all `_find_slot` tiers), `TestFindPreSave`, and `TestPreSaveSlot`.
+- **`tests/test_shadow_path.py`** — added `TestShadowMatch` and `TestConsumeShadowPathV2` (3-tuple API, ast_key matching, list→tuple bw-compat).
+- **`timeline_tests.rpy`** — added `_tl_test_jump_staging`, `_tl_test_jump_empty_shadow`, `_tl_test_cancel_jump`, `_tl_test_jump_chapter_staging`, `_tl_test_jump_uses_pre_save`.
+- **Why**: snapshots stored in `_tl_history` nodes caused a self-referential `get_roots()` cycle (every snapshot's roots included `store._tl_history`, which included all prior snapshots), making save files grow O(N²). Moving snapshots to `renpy.game.log` breaks the cycle entirely. `_tl_unfreeze_from_snapshot` eliminates the replay wait: instead of loading a pre-save and fast-forwarding through all menus to the target, the engine is restored instantly to the exact captured state. The unified `_tl_jump` entry point eliminates the v1 two-function split and the `_tl_synthetic_jump` indirection layer.
+
 ### Perf: _tl_find_nearest_pre_save — history-first lookup, O(N) with early exit
 
 - **`backend/tl_saveload.rpy`** — when `history` is provided, the function now sorts history descending by index and checks `os.path.exists` for each entry's expected slot name, breaking on first hit. Previously it did a full `os.listdir` scan and then linear-searched history for each file's ast_key: O(disk_files × history_length). New approach is O(history_length) with early exit. `history=None` falls back to the original disk scan (used by `_tl_thin_pre_saves`).

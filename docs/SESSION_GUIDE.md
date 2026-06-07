@@ -25,15 +25,17 @@ The mod is split across three layers:
 - `timeline_tests.rpy` — in-game test runner (Shift+F9)
 
 **Subsystem modules (`backend/`)** — all run at `init -2 python:`
-- `tl_saveload.rpy` — checkpoint save/load, slot naming, replay state, jump mechanics
+- `tl_saveload.rpy` — jump control: `_tl_jump`, `_tl_cancel_jump`, `_find_slot` (disk fallback), slot-naming helpers, recovery save write
+- `tl_snapshot_cache.rpy` — snapshot capture (`_tl_capture_snapshot`), cache on `renpy.game.log`, restore via `_tl_unfreeze_from_snapshot`
 - `tl_assets.rpy` — thumbnail capture, asset resolution, displayable creation, caching
 - `tl_ghost_logic.rpy` — ghost card synthesis; monkey-patches `renpy.ast.If.execute` and `Python.execute`
 - `tl_route_logic.rpy` — route tracker: AST index build, chip filtering/ordering, var change detection pipeline
 - `tl_seen_check.rpy` — seen-state tracking, descriptors, option-seen checks
-- `tl_shadow_path.rpy` — replay-aid shadow path: build, stage, match, consume
+- `tl_shadow_path.rpy` — replay-aid shadow path: match and consume (3-tuple return); shadow entries transported via `persistent._tl_replay_path`
 - `tl_chapter.rpy` — chapter metadata loading, rollback
 - `tl_menu_location.rpy` — stable menu site identity keys
 - `tl_menu_options.rpy` — choice entry/index helpers
+- `tl_coverage.rpy` — coverage index: collect seen descriptors for all if-branch blocks
 - `tl_ast_dump.rpy` — live AST → JSON dump for offline tools
 
 **UI screens (`ui/`)** — screen definitions only, no behavior logic
@@ -67,7 +69,9 @@ Everything else in `tools/` (gen_cfg.py, causal_analysis.py, build_vis.py, etc.)
 
 ### Jump back / replay aid / shadow path
 
+- `docs/JUMP.md`
 - `backend/tl_saveload.rpy`
+- `backend/tl_snapshot_cache.rpy`
 - `backend/tl_shadow_path.rpy`
 - `timeline_hooks.rpy`
 

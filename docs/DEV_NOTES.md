@@ -26,47 +26,58 @@ Shared AST utilities used by multiple backend files. Loads first (alphabetical s
 
 ---
 
-### `backend/tl_saveload.rpy`
+### `backend/tl_snapshot_cache.rpy`
 
-Checkpoint save/load logic, replay state management, and jump control.
+Snapshot capture, cache management, and restore. All cache and snap dicts are plain `builtins.dict` (not `RevertableDict`) so RenPy's rollback system cannot revert them.
 
-**Store variables (saved with game):**
-- `_tl_history` — rolled back during fallback label jumps
-- `_tl_node_count` — rolled back during fallback label jumps
-- `_tl_context` — rolled back during fallback label jumps
-- `_tl_chapter_markers` — rolled back during fallback label jumps
-
-**Store variables (transient):**
-- `_tl_chap_end_slot` — slot name for a chapter-end load; cleared after use
-- `_tl_label_jump` — label name for fallback jump; cleared after use
-- `_tl_load_slot` — slot name to load via `_tl_do_load` label
-
-**Persistent variables:**
-- `persistent._tl_replaying` — bool; True during active replay
-- `persistent._tl_recovery_slot` — save slot name to restore on cancel
-- `persistent._tl_replay_path` — list of dicts; choice history snapshot at jump time
-- `persistent._tl_replay_target` — dict `{node_index, option_index}`; jump destination
-- `persistent._tl_prev_thumb` — bytes; thumbnail of the node before the jump target
-- `persistent._tl_pending_shadow_path` — staged shadow-path entries; persisted across checkpoint load
+**Cache location:** `renpy.game.log._tl_snapshot_cache` — keyed `{"menu": {node_index: snap}, "chapter": {label_name: snap}}`. Stored on the log object so it is outside `store` and never in `get_roots()`, eliminating recursive save-file cycles.
 
 **Functions:**
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `_tl_save_no_screenshot` | `(slot) → None` | Writes a save with no screenshot: uses `include_screenshot=False, mutate_flag=False` on RenPy 8+; shadows `interface.get_screenshot` with a 1×1 black PNG on RenPy 7. `mutate_flag=False` skips `location.scan()` (directory listing) after save. Used for all mod-internal saves. |
-| `_tl_pre_save_slot` | `(node_index, context, ast_key=None) → str` | Returns `_pre_{NNNN}_{hash6}` slot name; hash is MD5[:6] of `context[:node_index]` + optional `ast_key`. |
-| `_tl_write_pre_save` | `(node_index, context) → None` | Writes a stripped pre-menu save via `_tl_save_no_screenshot`: no screenshot, rollback log truncated to 1 entry, ~35–55 KB. Called in `_tl_record_before`. |
-| `_tl_find_pre_save` | `(node_index, context, ast_key=None, save_dir=None) → str or None` | Checks root savedir for a pre-save matching this node+context+ast_key; returns slot name or None. |
-| `_tl_should_save` | `(idx, dense=None, every=None) → bool` | **Legacy.** Sparse `_ch_*` saves are no longer written; kept for fallback load of old saves and tests. |
-| `_tl_save_slot` | `(node_index, context) → str` | **Legacy.** Returns `_ch_{NNNN}_{hash6}` slot name; kept for fallback load of old saves and tests. |
+| `_tl_get_snapshot_cache` | `() → dict` | Returns the cache dict on the current log, creating it if absent. |
+| `_tl_init_snapshot_cache` | `() → None` | Ensures cache exists on the current log; called by `_tl_on_load` after every save load. |
+| `_tl_capture_snapshot` | `() → dict` | Flushes pending store deltas (`log.complete(False)`), takes a `rollback_copy()` of the current context, deep-copies `ctx.info` (display state), patches `ctx.current` to an enclosing label when needed for compiled `.rpyc` files, and records `renpy.game.log.get_roots()`. Returns `{"roots": ..., "context": ctx}`. |
+| `_tl_cache_menu_snapshot` | `(node_index, snap) → None` | Writes snap to `cache["menu"][node_index]`. |
+| `_tl_cache_chapter_snapshot` | `(label_name, snap) → None` | Writes snap to `cache["chapter"][label_name]`. |
+| `_tl_get_menu_snapshot` | `(node_index) → dict or None` | Lookup in `cache["menu"]`; returns None if cache or key absent. |
+| `_tl_get_chapter_snapshot` | `(label_name) → dict or None` | Lookup in `cache["chapter"]`; returns None if absent. |
+| `_tl_transfer_snapshot_cache` | `(new_log) → None` | Copies `_tl_snapshot_cache` from the current log to `new_log`; called before `unfreeze()` so the cache survives the log replacement. |
+| `_tl_unfreeze_from_snapshot` | `(snap) → None (never returns)` | Deep-copies `snap["context"]` so Ren'Py's post-unfreeze mutations (e.g. `ctx.interacting = True`) don't corrupt the stored snapshot; resets `ctx.interacting = False` unconditionally (heals old saves where interacting was baked in). Builds a synthetic single-entry `RollbackLog`, copies the snapshot cache to the new log, then calls `unfreeze()` — atomically replaces live game state with the captured state. |
+
+---
+
+### `backend/tl_saveload.rpy`
+
+Jump control: snapshot-primary, disk saves as backward-compat fallback. The only disk write is the recovery save.
+
+**Store variables (transient):**
+- `_tl_chap_end_slot` — slot name for a chapter-end load; cleared after use
+- `_tl_load_slot` — slot name to load via `_tl_do_load` label
+
+**Persistent variables:**
+- `persistent._tl_replaying` — bool; True during active replay
+- `persistent._tl_recovery_slot` — save slot name to restore on cancel
+- `persistent._tl_replay_path` — list of `{index, chosen_index, ast_key}` dicts; choice history snapshot at jump time; also carries shadow path entries
+- `persistent._tl_replay_target` — dict `{node_index, option_index}`; jump destination; `None` for chapter jumps
+- `persistent._tl_prev_thumb` — bytes; thumbnail of the node before the jump target
+- `persistent._tl_synthetic_jump` — bool; True when a snapshot is pending unfreeze on load
+
+**Functions:**
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `_tl_save_no_screenshot` | `(slot) → None` | Writes a save with no screenshot: uses `include_screenshot=False, mutate_flag=False` on RenPy 8+; shadows `interface.get_screenshot` with a 1×1 black PNG on RenPy 7. `mutate_flag=False` skips `location.scan()` (directory listing) after save. Used for the recovery save. |
+| `_tl_pre_save_slot` | `(node_index, context, ast_key=None) → str` | Returns `_pre_{NNNN}_{hash6}` slot name; hash is MD5[:6] of `context[:node_index]` + optional `ast_key`. Used by disk fallback lookup. |
+| `_tl_find_pre_save` | `(node_index, context, ast_key=None, save_dir=None) → str or None` | Checks root savedir for a pre-save matching this node+context+ast_key; returns slot name or None. Used by `_find_slot` for backward compat. |
+| `_tl_save_slot` | `(node_index, context) → str` | Returns `_ch_{NNNN}_{hash6}` slot name. Used by `_find_slot` to read old checkpoint saves. |
 | `_tl_chap_end_slot_name` | `(label, context=None, after_index=None) → str` | Returns `_ch_chap_{label}` or `_ch_chap_{label}_{hash6}` when context is provided. |
-| `_tl_find_nearest_save` | `(target_index, context, save_dir=None, start_exists=None, chap_candidates=None, _meta=None) → str or None` | Scans save dir for the chronology slot with highest index ≤ target_index that shares the same context prefix; falls back to `_ch_start` if present. When `_meta` dict is provided, populates `_meta["index"]` with the winning slot's index. |
-| `_tl_clear_replay_state` | `() → None` | Clears all replay-related persistent variables and saves persistent data. |
-| `_tl_begin_label_jump` | `(label) → None` | Initiates a chapter-end jump; loads chapter-end save slot if it exists on disk, otherwise rolls back history/context/markers and sets `_tl_label_jump` for fallback. |
-| `_tl_find_nearest_pre_save` | `(target_index, context, history=None, save_dir=None, _meta=None) → str or None` | When history is provided: iterates history descending by index, computes expected slot name directly from each entry's ast_key, checks `os.path.exists` — O(history_length) with early exit. When history is None: falls back to a full disk scan with `ast_key=None`. Populates `_meta["index"]` when provided. |
-| `_tl_find_nearest_any_save` | `(target_index, context, history=None, chap_candidates=None) → str or None` | Competes `_tl_find_nearest_pre_save` and `_tl_find_nearest_save` using `_meta` index tracking; returns whichever pool yielded the higher-index slot. Used as Tier 2 in `_tl_begin_jump`. |
-| `_tl_begin_jump` | `(node_index, option_index) → str or None` | Initiates a timeline jump via `_tl_save_no_screenshot` for the recovery save; stages shadow path; tries Tier 1 (exact pre-save), Tier 2 (`_tl_find_nearest_any_save` — best of pre or `_ch_*`); returns `"load"` if a save was found or None. |
-| `_tl_cancel_replay` | `() → None` | Cancels an in-progress replay; snapshots current thumbnails to `renpy.game._tl_thumb_cache` before loading the recovery save. |
+| `_tl_chap_slot_exists` | `(slot_name, save_dir=None) → (bool, str or None)` | Checks both `-LT1.save` and `.save` extensions; returns `(exists, slot_name)`. |
+| `_tl_clear_replay_state` | `() → None` | Clears all replay-related persistent variables and calls `renpy.save_persistent()`. |
+| `_find_slot` | `(node_index, hist, context) → str or None` | Tier 1: exact `_pre_*` at target. Tier 2: walk history descending from `node_index-1`; for each node check pre-save then `_ch_*` checkpoint; also check chapter-end markers at each step. Tier 3: `_ch_start`. Returns first hit. |
+| `_tl_jump` | `(node_index=None, option_index=None, chapter_label=None) → None` | Unified entry point for menu and chapter jumps. Writes recovery save, stages `persistent._tl_replay_path` (and shadow entries), looks up snapshot; if valid dispatches via `_dispatch_snap`; else falls back to `_find_slot` or chapter-end slot on disk. |
+| `_tl_cancel_jump` | `() → None` | Cancels an in-progress jump; snapshots current thumbnails to `renpy.game._tl_thumb_cache`, clears replay state, triggers recovery load. |
 
 ---
 
@@ -240,15 +251,14 @@ Seen-state tracking using descriptor tuples, evaluation against live RenPy state
 
 Shadow path: the replay-aid hint chain built from history after a jump target.
 
+Shadow entries use `ast_key` — the same `(filename, linenumber)` tuple as `_tl_node_menu_site_key()`. Old entries with `menu_site_key` stored as a list are coerced to tuple on lookup for backward compat.
+
 **Functions:**
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `_tl_build_shadow_path` | `(history, node_index) → list` | Extracts replay-aid shadow entries from history nodes after node_index; each entry has `chosen_index`, optional `_location`, and `menu_site_key` derived from `ast_key`. |
-| `_tl_stage_shadow_path` | `(history, node_index) → list or None` | Returns the shadow-path payload to persist across a checkpoint load; returns None when the path would be empty. |
-| `_tl_shadow_match` | `(shadow_path, node) → int or None` | Returns the `chosen_index` from the first entry matching the current node, using `menu_site_key` or `_location`; returns None if no match. |
-| `_tl_consume_shadow_path` | `(shadow_path, node, chosen_index) → (list or None, int or None)` | Consumes shadow path entries up to and including the first match for node; returns `(remaining_path_or_none, diverged_orig_ci_or_none)`; `diverged_orig_ci` is set only when the player's choice differs from the original. |
-| `_tl_shadow_match_mode` | `(shadow_path, node) → str or None` | Returns which key type matched: `'menu_site_key'`, `'_location'`, or None. |
+| `_tl_shadow_match` | `(shadow_path, node) → int or None` | Returns the `chosen_index` from the first entry matching the current node by `ast_key`; returns None if no match. |
+| `_tl_consume_shadow_path` | `(shadow_path, node, chosen_index) → (list or None, int or None, str or None)` | Consumes shadow path entries up to and including the first `ast_key` match; returns `(remaining_path_or_none, diverged_orig_ci_or_none, match_mode_or_none)`; `diverged_orig_ci` is set only when the player's choice differs from the original. |
 
 ---
 
@@ -335,9 +345,7 @@ Menu interception, save callbacks, replay wrapper, and ghost card hook. Runs at 
 - `_tl_ghost_nodes` — ghost card list (see `backend/tl_ghost_logic.rpy`)
 - `_tl_ghost_highlight` — highlighted ghost row `(ast_key, branch_idx)` or None
 - `_tl_skip_ghost_ifs` — set of ast_keys to skip during ghost lookahead
-- `_tl_early_save_idx` — **legacy**; checkpoint writes removed, kept for old saves/tests
-- `_tl_pending_save_index` — **legacy**; checkpoint writes removed, kept for old saves/tests
-- `_tl_shadow_path` — list of shadow path entries or None
+- `_tl_shadow_path` — list of `{index, chosen_index, ast_key}` shadow entries or None
 
 **Persistent variables:**
 - `persistent._tl_replaying` — bool; True during active replay
@@ -358,9 +366,9 @@ Menu interception, save callbacks, replay wrapper, and ghost card hook. Runs at 
 | `_tl_exports_wrapper` | `(items, set=None, args=None, kwargs=None, item_arguments=None) → choice` | Wraps `renpy.exports.menu`; calls `_tl_record_before`, delegates to original, calls `_tl_record_after`. |
 | `_tl_store_wrapper` | `(items) → choice` | Wraps `renpy.store.menu`; handles replay interception (auto-pick at target, skip through path), shadow path match/consume, choice recording. |
 | `_tl_on_game_start` | `() → None` | Registered `start_callback`; clears replay state; writes `_ch_start` save. |
-| `_tl_on_load` | `() → None` | Registered `after_load_callback`; clears stale replay state or resumes valid replay; re-enables skip; restores shadow path from `persistent._tl_pending_shadow_path`; migrates img_names. |
+| `_tl_on_load` | `() → None` | Registered `after_load_callback`; if `_tl_synthetic_jump` is set, hides all `config.overlay_screens` (clears `restarting=True` stale ScreenDisplayables left by `before_restart()` during unfreeze) then calls `_tl_unfreeze_from_snapshot` (never returns); otherwise clears stale replay state or resumes valid replay; reconstructs `store._tl_shadow_path` from `persistent._tl_replay_path`; migrates img_names. |
 | `_tl_interact_callback` | `() → None` | Registered `interact_callback`; flushes all accumulated var changes via `_tl_flush_var_changes()` (batched since last interact). |
-| `_tl_chapter_label_cb` | `(label_name, abnormal) → None` | Registered `label_callback`; fires when any chapter end label is reached; records `{chapter_name, end_label, after_index}` marker; writes `_ch_chap_{label}_{hash}` save if it doesn't exist on disk. |
+| `_tl_chapter_label_cb` | `(label_name, abnormal) → None` | Registered `label_callback`; fires when any chapter end label is reached; records `{chapter_name, end_label, after_index}` marker; captures and caches a chapter snapshot via `_tl_capture_snapshot` / `_tl_cache_chapter_snapshot`. |
 
 ---
 
@@ -377,10 +385,7 @@ Store/persistent initialization, constants, logging, AST map build, and utility 
 **Store variables (transient, not saved):**
 - `_tl_modal_node` (default `None`) — node whose modal is open
 - `_tl_load_slot` (default `""`) — slot for `_tl_do_load` label
-- `_tl_label_jump` (default `""`) — label for fallback chapter jump
 - `_tl_chapter_markers` (default `[]`)
-- `_tl_pending_save_index` (default `None`) — **legacy**; checkpoint writes removed
-- `_tl_early_save_idx` (default `None`) — **legacy**; checkpoint writes removed
 - `_tl_chap_end_slot` (default `""`)
 - `_tl_ast_ready` (default `False`) — True after background AST build completes
 - `_tl_shadow_path` (default `None`)
@@ -390,17 +395,13 @@ Store/persistent initialization, constants, logging, AST map build, and utility 
 **Persistent variables (initialized once):**
 - `persistent._tl_replaying` (init `False`)
 - `persistent._tl_img_movie_cache` (init `{}`)
-- `persistent._tl_pending_shadow_path` (init `None`)
 - `persistent._tl_menu_scene_map` (init `{}`, version 3) — primary persistent thumbnail identity store
 - `persistent._tl_scene_map_version` (init `3`)
 
 **Constants:**
 - `TL_THUMB_WIDTH = 320`
 - `TL_THUMB_HEIGHT = 180`
-- `TL_SAVE_EVERY = 10` — **legacy**; sparse checkpoint writes removed
-- `TL_DENSE_SAVES = 5` — **legacy**; sparse checkpoint writes removed
 - `TL_THUMB_CACHE_MAX = 500` — max cached screenshot thumbnails
-- `TL_PROFILE_TIMELINE = False` — coarse timeline-screen profiling toggle
 - `TL_SIZE_BODY = 21`, `TL_SIZE_TITLE = 38`, `TL_SIZE_DOT = 14`, `TL_SIZE_BADGE = 12`, `TL_SIZE_HEADER = 28`, `TL_SIZE_SUBTITLE = 17`
 
 **Functions:**
@@ -410,10 +411,6 @@ Store/persistent initialization, constants, logging, AST map build, and utility 
 | `_tl_log` | `(msg) → None` | Appends msg with timestamp to `debug.txt` in the mod directory. |
 | `_tl_runtime_cache_store` | `() → dict` | Returns the transient runtime cache dict hung on `renpy.game.script`; avoids polluting saveable store. |
 | `_tl_runtime_choice_returns` | `(node, create=False) → list or None` | Returns transient `ChoiceReturn` slots for a node keyed by `id(node)`; creates list if `create=True`. |
-| `_tl_perf_mark` | `() → float or None` | Returns `time.perf_counter()` if `TL_PROFILE_TIMELINE` is True, else None. |
-| `_tl_perf_add` | `(label, started_at) → None` | Accumulates elapsed time for a profiling label. |
-| `_tl_perf_reset` | `(scope) → float or None` | Clears profiling stats for a scope and returns a new mark. |
-| `_tl_perf_dump` | `(scope, started_at=None) → None` | Logs accumulated profiling stats via `_tl_log`. |
 | `_tl_new_branch_id` | `() → str` | Returns a 12-character UUID hex string for a new branch. |
 | `_tl_count_locked_branches` | `() → int` | Counts globally locked branches by evaluating every descriptor in `persistent._tl_all_branch_descs` via `_tl_eval_seen_fn`. Called once per `timeline` screen open via screen `default _tl_locked_count`. |
 | `_tl_build_ast_map` | `() → None` | Entry point for the background AST walk; sets `_tl_ast_ready = True`, then calls `_tl_build_route_index`, `_tl_build_coverage_index`, and `_tl_build_menu_scene_index`. |
@@ -429,7 +426,7 @@ Post-load validation and save compatibility. Runs at `init -1`.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `_tl_validate_on_load` | `() → None` | Registered `after_load_callback`; resets `_tl_history` if wrong type; drops malformed nodes; re-indexes; migrates pre-v1.1 `chapter_start` tags to `_tl_chapter_markers`; clears transient UI state (`_tl_modal_node`, `_tl_ast_*`, `_tl_pending_chap_end_save`, `_tl_chap_end_slot`). |
+| `_tl_validate_on_load` | `() → None` | Registered `after_load_callback`; resets `_tl_history` if wrong type; drops malformed nodes; re-indexes; migrates pre-v1.1 `chapter_start` tags to `_tl_chapter_markers`; validates `_tl_shadow_path`; clears transient UI state (`_tl_modal_node`, `_tl_chap_end_slot`, `_tl_ghost_nodes`). |
 
 **Compatibility cases handled:**
 - Mod installed on existing save → graceful empty state, recording starts from installation point
@@ -464,7 +461,7 @@ Main timeline screen coordinator, keybindings, and jump labels.
 | Screen | Parameters | Description |
 |--------|-----------|-------------|
 | `timeline()` | none | Root screen; blur layer + dark overlay + header + scrollable body. Header has "History" / "Route" tab buttons. Body switches between card grid (cards view) and `use tl_route(...)` (route view). Default screen vars: `tl_view = "cards"`, `tl_route_expanded = False`, `tl_route_hover = None`. Route tooltip rendered at top level as absolute-positioned frame at `_tl_route_hover_pos + 14px`, clamped to screen bounds. Shows "Possible Routes" header + domain values with `→` current indicator. |
-| `tl_chapter_divider(chapter_name, end_label)` | `(str, str)` | Centered `—— End of {chapter} ——` divider between chapter sections; clicking calls `_tl_begin_label_jump` then jumps to `_tl_do_chap_end_jump`. |
+| `tl_chapter_divider(chapter_name, end_label)` | `(str, str)` | Centered `—— End of {chapter} ——` divider between chapter sections; clicking calls `Function(_tl_jump, chapter_label=end_label)` then jumps to `_tl_do_chap_end_jump`. |
 | `_tl_keylistener()` | none | Overlay screen; maps keybinds for `chronology_toggle`, `chronology_route`, and `tl_debug_toggle`. |
 
 ---
@@ -612,17 +609,19 @@ RenPy stub, `.rpy` loader, and shared production namespace for all test files.
 - **RenPy stub**: mock `renpy`, `store`, `persistent` modules with minimal AST node classes; includes `show_screen`, `seen_image`, translator stub, and `renpy.ast` module stub
 - **`.rpy` loader**: `load_rpy(rel_path, ns)` extracts and executes all `init [priority] python:` blocks from a `.rpy` file; requires trailing newline on last block line
 - **Shared namespace (`_rpy_ns`)**: loads backend files in this order:
-  1. `backend/tl_chapter.rpy`
-  2. `backend/tl_menu_location.rpy`
-  3. `backend/tl_menu_options.rpy`
-  4. `backend/tl_shadow_path.rpy`
-  5. `backend/tl_seen_check.rpy`
-  6. `backend/tl_saveload.rpy`
-  7. `backend/tl_assets.rpy`
-  8. `backend/tl_ghost_logic.rpy`
-  9. `backend/tl_route_logic.rpy`
-  10. `timeline_init.rpy`
-  11. `timeline_hooks.rpy`
+  1. `backend/tl_ast_utils.rpy`
+  2. `backend/tl_chapter.rpy`
+  3. `backend/tl_menu_location.rpy`
+  4. `backend/tl_menu_options.rpy`
+  5. `backend/tl_shadow_path.rpy`
+  6. `backend/tl_seen_check.rpy`
+  7. `backend/tl_saveload.rpy`
+  8. `backend/tl_assets.rpy`
+  9. `backend/tl_ghost_logic.rpy`
+  10. `backend/tl_route_logic.rpy`
+  11. `backend/tl_coverage.rpy`
+  12. `timeline_init.rpy`
+  13. `timeline_hooks.rpy`
 
 **Test helpers exported to tests:**
 - `_tl_validate_history(history)` — cleans malformed history nodes
@@ -635,17 +634,19 @@ RenPy stub, `.rpy` loader, and shared production namespace for all test files.
 
 ### `tests/test_saveload.py`
 
-**What it tests:** Save slot naming, nearest-save lookup, history validation, context accumulation, save frequency, and two-phase slot consistency.
+**What it tests:** Save slot naming, pre-save slot naming, pre-save file lookup, `_find_slot` tier logic, and history validation.
 
 **Run:** `pytest tests/test_saveload.py -v`
 
 | Class | Tests | Covers |
 |-------|-------|--------|
 | `TestSaveSlot` | 8 | Slot format `_ch_{NNNN}_{hash6}`, zero-padding, determinism, context/index sensitivity, empty context, large index |
-| `TestFindNearestSave` | 12 | Exact match, highest-below-target, ignores above-target, context hash must match, fallback to `_ch_start`, ignores recovery/start files, max valid index, context prefix divergence, chapter-end candidate beats lower checkpoint |
-| `TestValidateHistory` | 7 | Valid history unchanged, drops non-dict/missing-key/invalid-options entries, reindexes after drop, non-list input returns `[]` |
-| `TestContextAccumulation` | 3 | Context grows per choice, slot consistent with context prefix, diverged branch gets different slot |
-| `TestSaveDecision` | 7 | Dense saves for indices 0–4, first sparse milestone at index 9, gaps between milestones, custom dense/every params |
+| `TestValidateHistory` | 9 | Valid history unchanged, drops non-dict/missing-key/invalid-options entries, reindexes after drop, non-list input returns `[]`, empty options list |
+| `TestTwoPhaseSlotConsistency` | 3 | Early and refresh writes produce same slot; refresh does not use next choice |
+| `TestPreSaveSlot` | 11 | Format, padding, hash length, determinism, context/index sensitivity, ast_key disambiguation |
+| `TestFindPreSave` | 9 | LT1 extension, plain extension, wrong hash, wrong index, slot-not-path, ast_key match/mismatch |
+| `TestSalvageAstKeys` | 4 | Stale node rematched, valid node skipped, no candidate unmatched, restamp clears img_name |
+| `TestFindSlot` | 8 | Tier 1 exact pre-save, Tier 2 pre-save walk, Tier 2 checkpoint, closest-wins priority, chapter-end marker, `_ch_start` fallback, no saves returns None |
 | `TestTwoPhaseSlotConsistency` | 3 | Same slot before/after next node, refresh uses only context up to current node, consistency across multiple nodes |
 | `TestFindNearestSaveDensePattern` | 2 | Dense+sparse save pattern; target between milestones finds nearest lower save |
 
