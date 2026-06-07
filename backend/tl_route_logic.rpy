@@ -356,9 +356,11 @@ init -2 python:
         ## _cache is a function-level mutable default — invisible to Ren'Py rollback/save,
         ## so it survives native rollback and save loads without clearing.
         route_names = getattr(persistent, "_tl_route_var_names", None)
+        if not route_names:
+            return None
         if route_names is not _cache[0]:
             _cache[0] = route_names
-            _cache[1] = frozenset(route_names) if route_names else frozenset()
+            _cache[1] = frozenset(route_names)
         route_set = _cache[1]
         bytecode  = getattr(getattr(node, "code", None), "bytecode", None)
         if TL_DEBUG_ROUTE and bytecode is None:
@@ -409,6 +411,8 @@ init -2 python:
             _tl_flush_var_changes()
 
     def _tl_python_execute_patched(self):
+        if renpy.is_init_phase() or not _tl_is_game_file(getattr(self, "filename", None) or ""):
+            return _tl_route_orig_python_execute(self)
         snap = _tl_py_pre_var_snap(self)
         _tl_route_orig_python_execute(self)
         _tl_py_post_var_diff(snap)

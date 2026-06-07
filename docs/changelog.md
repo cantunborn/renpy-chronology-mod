@@ -7,6 +7,13 @@ that is present in the codebase but not yet committed.
 
 ## Unreleased
 
+### Fix: init-phase crash and incorrect runtime filtering in execute patches
+
+Both `_tl_if_execute_patched` and `_tl_python_execute_patched` were being called during Ren'Py's init phase (e.g. `init -1 python:` blocks in game scripts), before store defaults are applied. This caused a `TypeError` in `_tl_py_pre_var_snap` when `_tl_route_var_names` was not yet initialized.
+
+- **`backend/tl_ghost_logic.rpy`** — `_tl_if_execute_patched`: bail out via `renpy.is_init_phase()` before any state access; combined with existing `_tl_is_game_file` check into a single early return.
+- **`backend/tl_route_logic.rpy`** — `_tl_python_execute_patched`: same guard; removed `not route_names` early return from `_tl_py_pre_var_snap` (unreachable now that init phase is blocked at the wrapper); removed temp diagnostic log.
+
 ### Fix: ghost cards never appeared; remove dead `_tl_branch_id`
 
 `_tl_branch_id` was declared as `default _tl_branch_id = ""` and never assigned a non-empty value. All three gate guards that checked it (`_tl_on_if_execute`, `_tl_on_screen_navigate`, `_tl_py_pre_var_snap`) therefore always returned early, permanently suppressing ghost cards and var-change notifications.

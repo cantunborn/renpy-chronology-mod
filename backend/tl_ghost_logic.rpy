@@ -526,6 +526,8 @@ init python:
 
 
     def _tl_if_execute_patched(self):
+        if renpy.is_init_phase() or not _tl_is_game_file(getattr(self, "filename", None) or ""):
+            return _tl_orig_if_execute(self)
         ## Evaluate which branch will be taken BEFORE executing so condition
         ## state is captured cleanly (branch body may modify the same vars).
         taken = _tl_get_taken_branch(self)
