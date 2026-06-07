@@ -15,23 +15,23 @@ init -2 python:
         count as locked and inflate the number permanently.
         """
 
-        _if_nodes = []
+        if_nodes = []
 
-        def _tl_cov_visitor(_node, _state, _label=None):
-            if type(_node).__name__ == "If":
-                _if_nodes.append(_node)
-            return _state
+        def visitor(node, state, _label=None):
+            if type(node).__name__ == "If":
+                if_nodes.append(node)
+            return state
 
-        _tl_walk_ast_blocks(nodes, _tl_cov_visitor)
+        _tl_walk_ast_blocks(nodes, visitor)
 
-        _branch_descs = []
-        for _node in _if_nodes:
-            for _cond_str, _block in (getattr(_node, "entries", None) or []):
-                if not _block:
+        branch_descs = []
+        for node in if_nodes:
+            for cond_str, block in (getattr(node, "entries", None) or []):
+                if not block:
                     continue
-                _desc = _tl_make_seen_fn(_block)
-                if _desc[0] != "never":
-                    _branch_descs.append(_desc)
+                desc = _tl_make_seen_fn(block)
+                if desc[0] != "never":
+                    branch_descs.append(desc)
 
-        persistent._tl_all_branch_descs = _branch_descs
-        _tl_log("TL coverage index: {} branch descs".format(len(_branch_descs)))
+        persistent._tl_all_branch_descs = branch_descs
+        _tl_log("TL coverage index: {} branch descs".format(len(branch_descs)))

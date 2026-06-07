@@ -8,14 +8,16 @@
 
 init -2 python:
 
+    def _entry_key(entry):
+        """Return normalized site key from a shadow path entry (tuple or None)."""
+        key = entry.get("ast_key") or entry.get("menu_site_key")
+        return tuple(key) if isinstance(key, list) else key
+
     def _tl_shadow_match(shadow_path, node):
-        """Return chosen_index from the first entry matching the current node."""
+        """Return chosen_index from the first entry matching the current node, or None."""
         site_key = _tl_node_menu_site_key(node) if isinstance(node, dict) else None
         for entry in (shadow_path or []):
-            entry_sk = entry.get("ast_key") or entry.get("menu_site_key")
-            if isinstance(entry_sk, list):
-                entry_sk = tuple(entry_sk)
-            if site_key is not None and entry_sk == site_key:
+            if site_key is not None and _entry_key(entry) == site_key:
                 return entry.get("chosen_index")
         return None
 
@@ -23,19 +25,27 @@ init -2 python:
         """
         Consume shadow path entries up to and including the first entry matching node.
         Returns (new_path_or_none, diverged_orig_ci_or_none, match_mode_or_none).
-        Breaks on first match; tail is a slice. Replaces _tl_shadow_match_mode.
-        Backward compat: entries with "menu_site_key" (list or tuple) match via ast_key node.
+
+        On match: discards all entries before and including the match; returns the
+        tail as the new path (None when exhausted). If the player chose differently
+        from the shadow, returns the original chosen_index as diverged_orig_ci.
+        Backward compat: old entries with "menu_site_key" (list or tuple) match via ast_key.
         """
         if not shadow_path:
             return shadow_path, None, None
         site_key = _tl_node_menu_site_key(node) if isinstance(node, dict) else None
         for i, entry in enumerate(shadow_path):
-            entry_sk = entry.get("ast_key") or entry.get("menu_site_key")
-            if isinstance(entry_sk, list):
-                entry_sk = tuple(entry_sk)
-            if site_key is not None and entry_sk == site_key:
-                orig_ci  = entry.get("chosen_index")
-                new_sp   = shadow_path[i + 1:] or None
-                diverged = orig_ci if orig_ci != chosen_index else None
-                return new_sp, diverged, "ast_key"
+            if site_key is not None and _entry_key(entry) == site_key:
+                orig_chosen = entry.get("chosen_index")
+                remaining   = shadow_path[i + 1:] or None
+                diverged    = orig_chosen if orig_chosen != chosen_index else None
+               
+                _tl_log("TL shadow match: node={} via=ast_key site={} div={}".format(
+                    node.get("index") if isinstance(node, dict) else "?",
+                    site_key, diverged))
+                return remaining, diverged, "ast_key"
+        
+        _tl_log("TL shadow no-match: node={} sp_first={}".format(
+            node.get("index") if isinstance(node, dict) else "?",
+            _entry_key(shadow_path[0]) if shadow_path else None))
         return shadow_path, None, None

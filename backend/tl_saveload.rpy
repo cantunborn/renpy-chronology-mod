@@ -13,55 +13,54 @@ init -2 python:
 
     def _tl_save_no_screenshot(slot):
         """Call renpy.save(slot) without including a screenshot."""
-        _renpy_major = getattr(renpy, "version_tuple", (7,))[0]
-        if _renpy_major >= 8:
+        renpy_major = getattr(renpy, "version_tuple", (7,))[0]
+        if renpy_major >= 8:
             renpy.save(slot, include_screenshot=False, mutate_flag=False)
         else:
-            _iface = renpy.game.interface
+            iface = renpy.game.interface
             try:
-                _iface.get_screenshot = lambda: _TL_EMPTY_PNG
+                iface.get_screenshot = lambda: _TL_EMPTY_PNG
                 renpy.save(slot)
             finally:
                 try:
-                    del _iface.get_screenshot
+                    del iface.get_screenshot
                 except AttributeError:
                     pass
 
     def _tl_save_slot(node_index, context):
         raw = repr(tuple(context))
-        h6  = _tl_hashlib.md5(raw.encode("utf-8")).hexdigest()[:6]
-        return "_ch_{:04d}_{}".format(node_index, h6)
+        slot_hash  = _tl_hashlib.md5(raw.encode("utf-8")).hexdigest()[:6]
+        return "_ch_{:04d}_{}".format(node_index, slot_hash)
 
     def _tl_pre_save_slot(node_index, context, ast_key=None):
         raw = repr((tuple(context[:node_index]), ast_key))
-        h6  = _tl_hashlib.md5(raw.encode("utf-8")).hexdigest()[:6]
-        return "_pre_{:04d}_{}".format(node_index, h6)
+        slot_hash  = _tl_hashlib.md5(raw.encode("utf-8")).hexdigest()[:6]
+        return "_pre_{:04d}_{}".format(node_index, slot_hash)
 
     def _tl_find_pre_save(node_index, context, ast_key=None, save_dir=None):
         """Return pre-menu save slot for node_index if it exists on disk, else None."""
-        import os as _os
-        _slot = _tl_pre_save_slot(node_index, context, ast_key)
-        _root = save_dir if save_dir is not None else renpy.config.savedir
-        for _ext in ("-LT1.save", ".save"):
-            if _os.path.exists(_os.path.join(_root, _slot + _ext)):
-                return _slot
+        import os
+        slot = _tl_pre_save_slot(node_index, context, ast_key)
+        root = save_dir if save_dir is not None else renpy.config.savedir
+        for ext in ("-LT1.save", ".save"):
+            if os.path.exists(os.path.join(root, slot + ext)):
+                return slot
         return None
 
     def _tl_chap_end_slot_name(label, context=None, after_index=None):
         """Return the save-slot name for a chapter-end checkpoint."""
         if context is not None and after_index is not None:
-            h6 = _tl_hashlib.md5(
-                repr(tuple(context[:after_index])).encode("utf-8")
-            ).hexdigest()[:6]
-            return "_ch_chap_{}_{}".format(label, h6)
+            raw = repr(tuple(context[:after_index]))
+            slot_hash = _tl_hashlib.md5(raw.encode("utf-8")).hexdigest()[:6]
+            return "_ch_chap_{}_{}".format(label, slot_hash)
         return "_ch_chap_{}".format(label)
 
     def _tl_chap_slot_exists(slot_name, save_dir=None):
         """Return (exists, slot_name) — checks root savedir."""
-        import os as _os
-        _root = save_dir if save_dir is not None else renpy.config.savedir
-        for _ext in ("-LT1.save", ".save"):
-            if _os.path.exists(_os.path.join(_root, slot_name + _ext)):
+        import os
+        root = save_dir if save_dir is not None else renpy.config.savedir
+        for ext in ("-LT1.save", ".save"):
+            if os.path.exists(os.path.join(root, slot_name + ext)):
                 return True, slot_name
         return False, None
 
@@ -118,7 +117,7 @@ init -2 python:
         Tier 1: exact pre-save at target index.
         Tier 2: walk history downward from node_index-1; first hit wins (closest save).
         """
-        import os as _os
+        import os
         save_dir = renpy.config.savedir
 
         target_node = next((node for node in hist if node["index"] == node_index), None)
@@ -137,7 +136,7 @@ init -2 python:
                 if pre:
                     return pre
                 chk_slot = _tl_save_slot(idx, context)
-                if _os.path.exists(_os.path.join(save_dir, chk_slot + "-LT1.save")):
+                if os.path.exists(os.path.join(save_dir, chk_slot + "-LT1.save")):
                     return chk_slot
 
             chap_marker = marker_by_idx.get(idx)
@@ -147,7 +146,7 @@ init -2 python:
                 if exists:
                     return full_slot
 
-        if _os.path.exists(_os.path.join(save_dir, "_ch_start-LT1.save")):
+        if os.path.exists(os.path.join(save_dir, "_ch_start-LT1.save")):
             return "_ch_start"
         return None
 

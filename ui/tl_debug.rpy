@@ -52,7 +52,6 @@ screen tl_debug():
 
                 null ysize 4
                 use tl_dbrow("RenPy", "{}.{}.{}".format(renpy.version_tuple[0], renpy.version_tuple[1], renpy.version_tuple[2]))
-                use tl_dbrow("branch_id",   _tl_branch_id or "(none)")
                 use tl_dbrow("node_count",  str(_tl_node_count))
                 use tl_dbrow("history len", str(len(_tl_history)))
                 use tl_dbrow("ast_ready",   str(_tl_ast_ready))

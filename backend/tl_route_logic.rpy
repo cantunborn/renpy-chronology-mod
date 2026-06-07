@@ -19,53 +19,53 @@ init -2 python:
         Returns (route_vars, numeric_vars, if_nodes).
         Mutates domain in place with assignment literal values.
         """
-        import ast as _pyast
-        _route_vars   = set()
-        _numeric_vars = set()
-        _if_nodes     = []
+        import ast
+        route_vars   = set()
+        numeric_vars = set()
+        if_nodes     = []
 
-        def _visitor(_node, _state, _label=None):
-            _nt = type(_node).__name__
-            if _nt == "Python":
-                _code = getattr(_node, "code", None)
-                _src  = getattr(_code, "source", None) if _code else None
-                if not _src:
-                    return _state
+        def _visitor(node, state, _label=None):
+            node_type = type(node).__name__
+            if node_type == "Python":
+                code = getattr(node, "code", None)
+                src  = getattr(code, "source", None) if code else None
+                if not src:
+                    return state
                 try:
-                    _tree = _pyast.parse(_src, mode="exec")
+                    tree = ast.parse(src, mode="exec")
                 except SyntaxError:
-                    return _state
-                for _stmt in _pyast.walk(_tree):
-                    if isinstance(_stmt, _pyast.Assign):
-                        for _t in _stmt.targets:
-                            if isinstance(_t, _pyast.Name):
-                                _n = _t.id
-                                if not _n.startswith("_"):
-                                    _route_vars.add(_n)
-                                    _rv = _stmt.value
+                    return state
+                for stmt in ast.walk(tree):
+                    if isinstance(stmt, ast.Assign):
+                        for target in stmt.targets:
+                            if isinstance(target, ast.Name):
+                                var_name = target.id
+                                if not var_name.startswith("_"):
+                                    route_vars.add(var_name)
+                                    rhs = stmt.value
                                     ## Arithmetic RHS (var = var + n) → numeric counter
-                                    if (isinstance(_rv, _pyast.BinOp) and
-                                            isinstance(_rv.left, _pyast.Name) and
-                                            _rv.left.id == _n):
-                                        _numeric_vars.add(_n)
+                                    if (isinstance(rhs, ast.BinOp) and
+                                            isinstance(rhs.left, ast.Name) and
+                                            rhs.left.id == var_name):
+                                        numeric_vars.add(var_name)
                                     else:
-                                        _lit = _tl_ast_literal_value(_rv)
-                                        if _lit is not None:
-                                            domain.setdefault(_n, set()).add(_lit)
-                    elif isinstance(_stmt, _pyast.AugAssign):
-                        _t = _stmt.target
-                        if isinstance(_t, _pyast.Name):
-                            _n = _t.id
-                            if not _n.startswith("_"):
-                                _route_vars.add(_n)
-                                _numeric_vars.add(_n)   ## += / -= always a counter
-            elif _nt == "If":
-                _if_nodes.append(_node)
-            return _state
+                                        lit = _tl_ast_literal_value(rhs)
+                                        if lit is not None:
+                                            domain.setdefault(var_name, set()).add(lit)
+                    elif isinstance(stmt, ast.AugAssign):
+                        target = stmt.target
+                        if isinstance(target, ast.Name):
+                            var_name = target.id
+                            if not var_name.startswith("_"):
+                                route_vars.add(var_name)
+                                numeric_vars.add(var_name)   ## += / -= always a counter
+            elif node_type == "If":
+                if_nodes.append(node)
+            return state
 
         _tl_walk_ast_blocks(nodes, _visitor)
-        _tl_log("TL route index: {} assigned vars".format(len(_route_vars)))
-        return _route_vars, _numeric_vars, _if_nodes
+        _tl_log("TL route index: {} assigned vars".format(len(route_vars)))
+        return route_vars, numeric_vars, if_nodes
 
 
     def _tl_ri_collect_defaults(nodes, route_vars, domain):
@@ -74,40 +74,40 @@ init -2 python:
         Mutates route_vars and domain in place.
         Returns defaults dict.
         """
-        _defaults = {}
-        _found = 0
-        for _dn in nodes:
-            if type(_dn).__name__ != "Default":
+        defaults = {}
+        found = 0
+        for node in nodes:
+            if type(node).__name__ != "Default":
                 continue
-            _found += 1
-            _vn = getattr(_dn, "varname", None)
-            _store_attr = getattr(_dn, "store", "store")
-            _code = getattr(_dn, "code", None)
-            _bc = getattr(_code, "bytecode", None)
-            if _store_attr != "store":
+            found += 1
+            var_name   = getattr(node, "varname", None)
+            store_attr = getattr(node, "store", "store")
+            code       = getattr(node, "code", None)
+            bytecode   = getattr(code, "bytecode", None)
+            if store_attr != "store":
                 if TL_DEBUG_ROUTE:
-                    _tl_log("TL default skip {}: store={}".format(_vn, _store_attr))
+                    _tl_log("TL default skip {}: store={}".format(var_name, store_attr))
                 continue
-            if not _vn or _vn.startswith("_"):
+            if not var_name or var_name.startswith("_"):
                 continue
-            if _bc is None:
+            if bytecode is None:
                 if TL_DEBUG_ROUTE:
-                    _tl_log("TL default skip {}: bytecode=None code={}".format(_vn, _code))
+                    _tl_log("TL default skip {}: bytecode=None code={}".format(var_name, code))
                 continue
             try:
-                _dv = renpy.python.py_eval_bytecode(_bc)
-                if isinstance(_dv, (bool, int, float, str)):
-                    _defaults[_vn] = _dv
+                default_val = renpy.python.py_eval_bytecode(bytecode)
+                if isinstance(default_val, (bool, int, float, str)):
+                    defaults[var_name] = default_val
                 elif TL_DEBUG_ROUTE:
-                    _tl_log("TL default skip {}: non-scalar type={}".format(_vn, type(_dv).__name__))
-            except Exception as _e:
+                    _tl_log("TL default skip {}: non-scalar type={}".format(var_name, type(default_val).__name__))
+            except Exception as e:
                 if TL_DEBUG_ROUTE:
-                    _tl_log("TL default skip {}: eval error {}".format(_vn, _e))
-        _tl_log("TL default walk: found {} Default nodes, captured {}".format(_found, len(_defaults)))
-        route_vars.update(_defaults.keys())
-        for _vn, _dv in _defaults.items():
-            domain.setdefault(_vn, set()).add(str(_dv))
-        return _defaults
+                    _tl_log("TL default skip {}: eval error {}".format(var_name, e))
+        _tl_log("TL default walk: found {} Default nodes, captured {}".format(found, len(defaults)))
+        route_vars.update(defaults.keys())
+        for var_name, default_val in defaults.items():
+            domain.setdefault(var_name, set()).add(str(default_val))
+        return defaults
 
 
     def _tl_ri_build_if_counts(if_nodes, route_vars, domain):
@@ -117,50 +117,50 @@ init -2 python:
         Mutates domain in place with condition literal values.
         Returns (if_count, if_key_to_vars).
         """
-        import ast as _pyast
-        _if_count      = {}
-        _if_key_to_vars = {}
+        import ast
+        if_count       = {}
+        if_key_to_vars = {}
 
-        for _node in if_nodes:
-            _entries = getattr(_node, "entries", None)
-            if not _entries:
+        for node in if_nodes:
+            entries = getattr(node, "entries", None)
+            if not entries:
                 continue
-            _ast_key  = (getattr(_node, "filename", ""), getattr(_node, "linenumber", 0))
-            _node_vars = set()
+            ast_key   = (getattr(node, "filename", ""), getattr(node, "linenumber", 0))
+            node_vars = set()
 
-            for _cond_str, _block in _entries:
-                _cond_s = str(_cond_str)
-                if _cond_s in ("True", "False"):
+            for cond_str, _ in entries:
+                cond_str = str(cond_str)
+                if cond_str in ("True", "False"):
                     continue
-                for _v in _tl_extract_vars_from_conditions([_cond_s]):
-                    if _v in route_vars:
-                        _node_vars.add(_v)
+                for var_name in _tl_extract_vars_from_conditions([cond_str]):
+                    if var_name in route_vars:
+                        node_vars.add(var_name)
                 try:
-                    _ctree = _pyast.parse(_cond_s, mode="eval")
+                    cond_tree = ast.parse(cond_str, mode="eval")
                 except SyntaxError:
-                    _ctree = None
-                if _ctree:
-                    for _cnode in _pyast.walk(_ctree):
-                        if not isinstance(_cnode, _pyast.Compare):
+                    cond_tree = None
+                if cond_tree:
+                    for cnode in ast.walk(cond_tree):
+                        if not isinstance(cnode, ast.Compare):
                             continue
-                        if not isinstance(_cnode.left, _pyast.Name):
+                        if not isinstance(cnode.left, ast.Name):
                             continue
-                        _cv = _cnode.left.id
-                        if _cv not in route_vars:
+                        cond_var = cnode.left.id
+                        if cond_var not in route_vars:
                             continue
-                        for _op, _comp in zip(_cnode.ops, _cnode.comparators):
-                            if not isinstance(_op, (_pyast.Eq, _pyast.NotEq)):
+                        for op, comp in zip(cnode.ops, cnode.comparators):
+                            if not isinstance(op, (ast.Eq, ast.NotEq)):
                                 continue
-                            _cl = _tl_ast_literal_value(_comp)
-                            if _cl is not None:
-                                domain.setdefault(_cv, set()).add(_cl)
+                            lit = _tl_ast_literal_value(comp)
+                            if lit is not None:
+                                domain.setdefault(cond_var, set()).add(lit)
 
-            if _node_vars:
-                _if_key_to_vars[_ast_key] = list(_node_vars)
-                for _v in _node_vars:
-                    _if_count[_v] = _if_count.get(_v, 0) + 1
+            if node_vars:
+                if_key_to_vars[ast_key] = list(node_vars)
+                for var_name in node_vars:
+                    if_count[var_name] = if_count.get(var_name, 0) + 1
 
-        return _if_count, _if_key_to_vars
+        return if_count, if_key_to_vars
 
 
     def _tl_build_route_index(nodes):
@@ -169,22 +169,22 @@ init -2 python:
         Three phases: Python/If walk → Default walk → If-count walk.
         Writes results into persistent.
         """
-        _domain = {}
+        domain = {}
 
-        _route_vars, _numeric_vars, _if_nodes = _tl_ri_collect_assigned(nodes, _domain)
-        _defaults = _tl_ri_collect_defaults(nodes, _route_vars, _domain)
-        _if_count, _if_key_to_vars = _tl_ri_build_if_counts(_if_nodes, _route_vars, _domain)
+        route_vars, numeric_vars, if_nodes = _tl_ri_collect_assigned(nodes, domain)
+        defaults = _tl_ri_collect_defaults(nodes, route_vars, domain)
+        if_count, if_key_to_vars = _tl_ri_build_if_counts(if_nodes, route_vars, domain)
 
-        persistent._tl_route_var_names = list(_route_vars)
-        persistent._tl_var_defaults    = _defaults
-        persistent._tl_var_if_count    = _if_count
-        persistent._tl_if_key_to_vars  = _if_key_to_vars
-        persistent._tl_var_domain      = {_v: sorted(_vals) for _v, _vals in _domain.items()}
-        persistent._tl_var_is_numeric  = _numeric_vars
+        persistent._tl_route_var_names = list(route_vars)
+        persistent._tl_var_defaults    = defaults
+        persistent._tl_var_if_count    = if_count
+        persistent._tl_if_key_to_vars  = if_key_to_vars
+        persistent._tl_var_domain      = {var: sorted(vals) for var, vals in domain.items()}
+        persistent._tl_var_is_numeric  = numeric_vars
         _tl_log("TL route index: {} total route vars, {} with if-conditions (max={})".format(
-            len(_route_vars),
-            len(_if_count),
-            max(_if_count.values()) if _if_count else 0,
+            len(route_vars),
+            len(if_count),
+            max(if_count.values()) if if_count else 0,
         ))
 
 
@@ -214,9 +214,9 @@ init -2 python:
         ghost_nodes = getattr(store, "_tl_ghost_nodes", [])
 
         ghost_vars = set()
-        for _g in ghost_nodes:
-            _av = _tl_ghost_ast(_g["ast_key"]).get("affecting_vars") or _g.get("affecting_vars") or []
-            ghost_vars.update(_av)
+        for ghost in ghost_nodes:
+            affecting_vars = _tl_ghost_ast(ghost["ast_key"]).get("affecting_vars") or ghost.get("affecting_vars") or []
+            ghost_vars.update(affecting_vars)
 
         recently_changed = getattr(store, "_tl_recently_changed_vars", None) or set()
         highlighted = ghost_vars | recently_changed
@@ -225,14 +225,14 @@ init -2 python:
 
         ## Highlighted vars that are in defaults but not in route_var_names get a chip too.
         ## (declared via `default`, only read in conditions, never $-assigned)
-        _var_name_set = set(var_names)
-        _extra = [v for v in sorted(highlighted) if v not in _var_name_set and v in var_defaults]
-        if TL_DEBUG_ROUTE and _extra:
-            _tl_log("TL chips: highlighted vars added from defaults only: {}".format(_extra))
-        _all_names = list(var_names) + _extra
+        var_name_set = set(var_names)
+        extra = [v for v in sorted(highlighted) if v not in var_name_set and v in var_defaults]
+        if TL_DEBUG_ROUTE and extra:
+            _tl_log("TL chips: highlighted vars added from defaults only: {}".format(extra))
+        all_names = list(var_names) + extra
 
         chips = []
-        for name in _all_names:
+        for name in all_names:
             val = getattr(store, name, None)
             if val is None:
                 continue
@@ -255,14 +255,14 @@ init -2 python:
 
     def _tl_format_numeric_change(label, old_val, new_val):
         """Format a numeric var change as '↑N Label' or '↓N Label', omitting N when delta is 1."""
-        _f_new = float(new_val)
-        _f_old = float(old_val)
-        _delta = abs(_f_new - _f_old)
-        _arrow = "↑" if _f_new > _f_old else "↓"
-        if _delta != 1:
-            _mag = int(_delta) if _delta == int(_delta) else _delta
-            return _arrow + str(_mag) + " " + label
-        return _arrow + " " + label
+        new_val = float(new_val)
+        old_val = float(old_val)
+        delta = abs(new_val - old_val)
+        arrow = "↑" if new_val > old_val else "↓"
+        if delta != 1:
+            mag = int(delta) if delta == int(delta) else delta
+            return arrow + str(mag) + " " + label
+        return arrow + " " + label
 
     def _tl_flush_var_changes():
         """
@@ -272,27 +272,27 @@ init -2 python:
         if not getattr(persistent, "_tl_var_notifs_enabled", False):
             store._tl_pending_var_changes = {}
             return
-        _pending = getattr(store, "_tl_pending_var_changes", None) or {}
-        if not _pending:
+        pending = getattr(store, "_tl_pending_var_changes", None) or {}
+        if not pending:
             return
         store._tl_pending_var_changes = {}
-        _numeric = getattr(persistent, "_tl_var_is_numeric", None) or set()
-        _parts = []
-        for _n in sorted(_pending):
-            _old, _new = _pending[_n]
-            _label = _tl_prettify_var(_n)
-            if _n in _numeric:
+        numeric_vars = getattr(persistent, "_tl_var_is_numeric", None) or set()
+        parts = []
+        for var_name in sorted(pending):
+            old, new = pending[var_name]
+            label = _tl_prettify_var(var_name)
+            if var_name in numeric_vars:
                 try:
-                    _parts.append(_tl_format_numeric_change(_label, _old, _new))
+                    parts.append(_tl_format_numeric_change(label, old, new))
                 except (ValueError, TypeError):
-                    _parts.append(_label + " → " + _tl_strip_renpy_tags(str(_new)))
+                    parts.append(label + " → " + _tl_strip_renpy_tags(str(new)))
             else:
-                _parts.append(_label + " → " + _tl_strip_renpy_tags(str(_new)))
-        if _parts:
-            _lines = [" · ".join(_parts[_i:_i+3]) for _i in range(0, len(_parts), 3)]
-            _msg = "\n".join(_lines)
-            _tl_log("TL var notify: {}".format(_msg))
-            renpy.show_screen("_tl_notify", message=_msg)
+                parts.append(label + " → " + _tl_strip_renpy_tags(str(new)))
+        if parts:
+            lines = [" · ".join(parts[i:i+3]) for i in range(0, len(parts), 3)]
+            msg = "\n".join(lines)
+            _tl_log("TL var notify: {}".format(msg))
+            renpy.show_screen("_tl_notify", message=msg)
 
     def _tl_flush_menu_snap():
         """
@@ -303,35 +303,35 @@ init -2 python:
         if not getattr(persistent, "_tl_var_notifs_enabled", False):
             store._tl_menu_var_snap = None
             return
-        _snap = getattr(store, "_tl_menu_var_snap", None)
-        if _snap is None:
+        snap = getattr(store, "_tl_menu_var_snap", None)
+        if snap is None:
             return
         store._tl_menu_var_snap = None
-        _numeric = getattr(persistent, "_tl_var_is_numeric", None) or set()
-        _parts = []
-        for _n in sorted(_snap):
-            _old = _snap[_n]
-            if _old is not None:
+        numeric_vars = getattr(persistent, "_tl_var_is_numeric", None) or set()
+        parts = []
+        for var_name in sorted(snap):
+            old = snap[var_name]
+            if old is not None:
                 continue   ## non-init — already emitted immediately by Python.execute patch
-            _new = getattr(store, _n, None)
-            if _new is None:
+            new = getattr(store, var_name, None)
+            if new is None:
                 continue
-            _rcv = getattr(store, "_tl_recently_changed_vars", None)
-            if isinstance(_rcv, set):
-                _rcv.add(_n)
-            _label = _tl_prettify_var(_n)
-            if _n in _numeric:
+            recently_changed = getattr(store, "_tl_recently_changed_vars", None)
+            if isinstance(recently_changed, set):
+                recently_changed.add(var_name)
+            label = _tl_prettify_var(var_name)
+            if var_name in numeric_vars:
                 try:
-                    _parts.append(_tl_format_numeric_change(_label, _old or 0, _new))
+                    parts.append(_tl_format_numeric_change(label, old or 0, new))
                 except (ValueError, TypeError):
-                    _parts.append(_label + " → " + _tl_strip_renpy_tags(str(_new)))
+                    parts.append(label + " → " + _tl_strip_renpy_tags(str(new)))
             else:
-                _parts.append(_label + " → " + _tl_strip_renpy_tags(str(_new)))
-        if _parts:
-            _lines = [" · ".join(_parts[_i:_i+3]) for _i in range(0, len(_parts), 3)]
-            _msg = "\n".join(_lines)
-            _tl_log("TL menu_snap notify: {}".format(_msg))
-            renpy.show_screen("_tl_notify", message=_msg)
+                parts.append(label + " → " + _tl_strip_renpy_tags(str(new)))
+        if parts:
+            lines = [" · ".join(parts[i:i+3]) for i in range(0, len(parts), 3)]
+            msg = "\n".join(lines)
+            _tl_log("TL menu_snap notify: {}".format(msg))
+            renpy.show_screen("_tl_notify", message=msg)
 
     ## ── Python.execute patch — route var change detection ────────────────────
 
@@ -340,11 +340,10 @@ init -2 python:
     _tl_route_orig_python_execute = _tl_route_renpy_ast.Python.execute
 
     def _tl_py_pre_var_snap(node, _cache=[None, None]):
-        _filename = getattr(node, "filename", None) or ""
-        if not (_tl_is_game_file(_filename) and
-                getattr(store, "_tl_branch_id", "") and
-                not getattr(persistent, "_tl_replaying", False) and
-                not config.skipping):
+        filename = getattr(node, "filename", None) or ""
+        if not _tl_is_game_file(filename):
+            return None
+        if getattr(persistent, "_tl_replaying", False) or config.skipping:
             return None
 
         ## hide-mode blocks write to a local dict, not the store — skip
@@ -356,62 +355,62 @@ init -2 python:
         ## bytecode — typically 0–5 names per block vs snapshotting all ~1000+ route vars.
         ## _cache is a function-level mutable default — invisible to Ren'Py rollback/save,
         ## so it survives native rollback and save loads without clearing.
-        _rnames = getattr(persistent, "_tl_route_var_names", None)
-        if _rnames is not _cache[0]:
-            _cache[0] = _rnames
-            _cache[1] = frozenset(_rnames) if _rnames else frozenset()
-        _rset   = _cache[1]
-        _bc     = getattr(getattr(node, "code", None), "bytecode", None)
-        if TL_DEBUG_ROUTE and _bc is None:
+        route_names = getattr(persistent, "_tl_route_var_names", None)
+        if route_names is not _cache[0]:
+            _cache[0] = route_names
+            _cache[1] = frozenset(route_names) if route_names else frozenset()
+        route_set = _cache[1]
+        bytecode  = getattr(getattr(node, "code", None), "bytecode", None)
+        if TL_DEBUG_ROUTE and bytecode is None:
             _tl_log("TL co_names diag: bc=None file={} code_type={}".format(
-                _filename, type(getattr(node, "code", None)).__name__))
-        _cnames = set(getattr(_bc, "co_names", ())) if _bc else set()
-        _watch  = _rset & _cnames
-        if TL_DEBUG_ROUTE and not _watch:
+                filename, type(getattr(node, "code", None)).__name__))
+        co_names = set(getattr(bytecode, "co_names", ())) if bytecode else set()
+        watch    = route_set & co_names
+        if TL_DEBUG_ROUTE and not watch:
             _tl_log("TL co_names miss: file={} rset_size={} cnames={}".format(
-                _filename, len(_rset), sorted(_cnames)[:10]))
-        if not _watch:
+                filename, len(route_set), sorted(co_names)[:10]))
+        if not watch:
             return None
 
         if TL_DEBUG_ROUTE:
-            _tl_log("TL co_names hit: {} watching={}".format(_filename, sorted(_watch)))
+            _tl_log("TL co_names hit: {} watching={}".format(filename, sorted(watch)))
 
-        return {_n: getattr(store, _n, None) for _n in _watch}
+        return {var_name: getattr(store, var_name, None) for var_name in watch}
 
     def _tl_py_post_var_diff(snap):
         if not snap:
             return
-        _notifs  = getattr(persistent, "_tl_var_notifs_enabled", False)
-        _rcv     = getattr(store, "_tl_recently_changed_vars", None)
-        _pend    = getattr(store, "_tl_pending_var_changes", None) if _notifs else None
-        _changed = False
-        for _n, _old in snap.items():
-            _new = getattr(store, _n, None)
-            if _new == _old:
+        notifs_enabled  = getattr(persistent, "_tl_var_notifs_enabled", False)
+        recently_changed = getattr(store, "_tl_recently_changed_vars", None)
+        pending          = getattr(store, "_tl_pending_var_changes", None) if notifs_enabled else None
+        changed = False
+        for var_name, old in snap.items():
+            new = getattr(store, var_name, None)
+            if new == old:
                 continue
             ## Tinting — always, independent of notifs flag
-            if isinstance(_rcv, set):
-                _rcv.add(_n)
+            if isinstance(recently_changed, set):
+                recently_changed.add(var_name)
             if TL_DEBUG_ROUTE:
-                _tl_log("TL co_names change: {} {} → {} (notifs={})".format(_n, _old, _new, _notifs))
+                _tl_log("TL co_names change: {} {} → {} (notifs={})".format(var_name, old, new, notifs_enabled))
             ## Pending delta — only when notifs enabled and not an init assignment
-            if _notifs and _old is not None:
-                if not isinstance(_pend, dict):
-                    _pend = {}
-                    store._tl_pending_var_changes = _pend
-                if _n in _pend:
-                    _pend[_n] = (_pend[_n][0], _new)
+            if notifs_enabled and old is not None:
+                if not isinstance(pending, dict):
+                    pending = {}
+                    store._tl_pending_var_changes = pending
+                if var_name in pending:
+                    pending[var_name] = (pending[var_name][0], new)
                 else:
-                    _pend[_n] = (_old, _new)
-                _changed = True
+                    pending[var_name] = (old, new)
+                changed = True
                 if TL_DEBUG_ROUTE:
-                    _tl_log("TL var diff: {} {} → {}".format(_n, _old, _new))
-        if _changed:
+                    _tl_log("TL var diff: {} {} → {}".format(var_name, old, new))
+        if changed:
             _tl_flush_var_changes()
 
     def _tl_python_execute_patched(self):
-        _snap = _tl_py_pre_var_snap(self)
+        snap = _tl_py_pre_var_snap(self)
         _tl_route_orig_python_execute(self)
-        _tl_py_post_var_diff(_snap)
+        _tl_py_post_var_diff(snap)
 
     _tl_route_renpy_ast.Python.execute = _tl_python_execute_patched

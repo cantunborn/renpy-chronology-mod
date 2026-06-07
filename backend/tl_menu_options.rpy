@@ -1,9 +1,39 @@
 ## =============================================================================
 ## CHRONOLOGY MOD — tl_menu_options.rpy
-## Choice menu entry helpers: filtering, indexing, choice-return population.
+## Choice menu entry helpers: raw item parsing, filtering, indexing, choice-return population.
 ## =============================================================================
 
 init -2 python:
+
+    def _tl_parse_menu_items(items):
+        """
+        Parse raw Ren'Py menu items (label, condition, block) into (prompt, valid_labels).
+        Caption entries (block=None) contribute to the prompt string; option entries
+        with a falsy condition are excluded. String conditions are evaluated via py_eval;
+        options are included on eval failure so a broken condition doesn't silently vanish.
+        Returns (prompt_str, valid_label_list).
+        """
+        prompt       = ""
+        valid_labels = []
+        for entry in items:
+            label = entry[0]
+            cond  = entry[1] if len(entry) > 1 else None
+            block = entry[2] if len(entry) > 2 else None
+            if block is None:
+                ## No block → caption / prompt entry
+                if not prompt:
+                    prompt = label
+            elif cond in (None, True, "True"):
+                valid_labels.append(label)
+            elif cond is False or cond == "False":
+                pass  ## explicitly locked
+            else:
+                try:
+                    if renpy.python.py_eval(cond):
+                        valid_labels.append(label)
+                except Exception:
+                    valid_labels.append(label)  ## include on eval failure
+        return prompt, valid_labels
 
     def _tl_valid_choice_entries(items):
         out = []

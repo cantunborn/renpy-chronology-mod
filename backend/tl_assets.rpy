@@ -1,5 +1,5 @@
 ## =============================================================================
-## CHRONOLOGY MOD — timeline_assets.rpy
+## CHRONOLOGY MOD — tl_assets.rpy
 ## Asset/thumbnail resolution helpers.
 ## =============================================================================
 
@@ -58,74 +58,74 @@ init -2 python:
 
     def _tl_scene_stmt_img_name(stmt):
         """Return a normalized image name from a Scene/Show-like AST node."""
-        _sp = getattr(stmt, "imspec", None)
-        if _sp:
-            _img = _tl_normalize_img_name(_sp)
-            if _img:
-                return _img
-        for _attr in ("img", "image", "name"):
-            _img = _tl_normalize_img_name(getattr(stmt, _attr, None))
-            if _img:
-                return _img
+        imspec = getattr(stmt, "imspec", None)
+        if imspec:
+            img = _tl_normalize_img_name(imspec)
+            if img:
+                return img
+        for attr in ("img", "image", "name"):
+            img = _tl_normalize_img_name(getattr(stmt, attr, None))
+            if img:
+                return img
         try:
-            _d = getattr(stmt, "__dict__", None) or {}
-            for _attr, _val in _d.items():
-                _img = _tl_normalize_img_name(_val)
-                if _img:
+            attrs = getattr(stmt, "__dict__", None) or {}
+            for attr, val in attrs.items():
+                img = _tl_normalize_img_name(val)
+                if img:
                     if TL_DEBUG_ASSET:
                         _tl_log("TL scene img fallback attr: type={} attr={} img={}".format(
-                            type(stmt).__name__, _attr, _img))
-                    return _img
-        except Exception:
-            pass
+                            type(stmt).__name__, attr, img))
+                    return img
+        except Exception as e:
+            _tl_log("TL scene_stmt_img_name failed: {}".format(e))
         return None
 
     def _tl_stmt_ast_key(stmt):
         """Return a normalized `(file, line)` key for a live AST node when possible."""
-        _file = getattr(stmt, "filename", None) or getattr(stmt, "file", None)
-        _line = getattr(stmt, "linenumber", None) or getattr(stmt, "line", None)
-        if _file and _line:
-            return (_file, _line)
+        fname = getattr(stmt, "filename", None) or getattr(stmt, "file", None)
+        lineno = getattr(stmt, "linenumber", None) or getattr(stmt, "line", None)
+        if fname and lineno:
+            return (fname, lineno)
         return None
 
     def _tl_live_scene_entry_img_name(entry):
         """Return a normalized image name from a live scene-list entry when possible."""
-        _name = getattr(entry, "name", None)
-        if _name and tuple(_name) in renpy.display.image.images:
-            return " ".join(_name)
+        name = getattr(entry, "name", None)
+        if name and tuple(name) in renpy.display.image.images:
+            return " ".join(name)
         return None
 
     def _tl_img_name_is_movie(img_name):
         """Best-effort check for movie/webm-backed registered images."""
         if not img_name:
             return False
-        _cache = persistent._tl_img_movie_cache or {}
-        if img_name in _cache:
-            return bool(_cache[img_name])
+        cache = persistent._tl_img_movie_cache or {}
+        if img_name in cache:
+            return bool(cache[img_name])
         try:
-            _key = tuple(img_name.split())
-            _disp = renpy.display.image.images.get(_key)
-            if _disp is None:
-                _cache[img_name] = False
+            img_key = tuple(img_name.split())
+            disp = renpy.display.image.images.get(img_key)
+            if disp is None:
+                cache[img_name] = False
                 return False
-            _s = repr(_disp)
-            if "Movie" in _s or ".webm" in _s.lower():
-                _cache[img_name] = True
+            disp_repr = repr(disp)
+            if "Movie" in disp_repr or ".webm" in disp_repr.lower():
+                cache[img_name] = True
                 return True
-            for _attr in ("filename", "files", "_files"):
-                _v = getattr(_disp, _attr, None)
-                if isinstance(_v, (tuple, list)):
-                    if any(isinstance(_x, _tl_text_types) and _x.lower().endswith(".webm") for _x in _v):
-                        _cache[img_name] = True
+            for attr in ("filename", "files", "_files"):
+                val = getattr(disp, attr, None)
+                if isinstance(val, (tuple, list)):
+                    if any(isinstance(item, _tl_text_types) and item.lower().endswith(".webm") for item in val):
+                        cache[img_name] = True
                         return True
-                elif isinstance(_v, _tl_text_types) and _v.lower().endswith(".webm"):
-                    _cache[img_name] = True
+                elif isinstance(val, _tl_text_types) and val.lower().endswith(".webm"):
+                    cache[img_name] = True
                     return True
         except Exception as e:
             _tl_log("TL img_name_is_movie failed for {}: {}".format(img_name, e))
-            _cache[img_name] = False
+            cache[img_name] = False
             return False
-        _cache[img_name] = False
+        cache[img_name] = False
         return False
 
     def _tl_asset_thumb_cache_key(img_name, width=None, height=None, fit_mode="cover"):
@@ -160,8 +160,8 @@ init -2 python:
     def _tl_is_supported_thumb_file(path):
         if not isinstance(path, _tl_text_types):
             return False
-        _p = path.lower()
-        return _p.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp"))
+        path_lower = path.lower()
+        return path_lower.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp"))
 
     def _tl_resolve_asset_file(img_name):
         """Resolve a plain file-backed image path for a registered img_name when possible."""
@@ -170,125 +170,127 @@ init -2 python:
         if img_name in _tl_asset_thumb_file_cache:
             return _tl_asset_thumb_file_cache[img_name]
         try:
-            _root = renpy.display.image.images.get(tuple(img_name.split()))
-        except Exception:
-            _root = None
-        if _root is None:
+            root = renpy.display.image.images.get(tuple(img_name.split()))
+        except Exception as e:
+            _tl_log("TL resolve_asset_file root failed: {}".format(e))
+            root = None
+        if root is None:
             _tl_asset_thumb_file_cache[img_name] = None
             return None
 
-        _seen = set()
+        seen = set()
 
-        def _walk(_obj):
-            if _obj is None:
+        def _walk(obj):
+            if obj is None:
                 return None
-            _oid = _tl_builtin_id(_obj)
-            if _oid in _seen:
+            obj_id = _tl_builtin_id(obj)
+            if obj_id in seen:
                 return None
-            _seen.add(_oid)
+            seen.add(obj_id)
 
-            for _attr in ("filename",):
-                _val = getattr(_obj, _attr, None)
-                if _tl_is_supported_thumb_file(_val) and renpy.loadable(_val):
-                    return _val
+            for attr in ("filename",):
+                val = getattr(obj, attr, None)
+                if _tl_is_supported_thumb_file(val) and renpy.loadable(val):
+                    return val
 
             try:
-                _files = _obj.predict_files() if hasattr(_obj, "predict_files") else []
-            except Exception:
-                _files = []
-            for _path in (_files or []):
-                if _tl_is_supported_thumb_file(_path) and renpy.loadable(_path):
-                    return _path
+                files = obj.predict_files() if hasattr(obj, "predict_files") else []
+            except Exception as e:
+                _tl_log("TL resolve_asset_file walk failed: {}".format(e))
+                files = []
+            for path in (files or []):
+                if _tl_is_supported_thumb_file(path) and renpy.loadable(path):
+                    return path
 
-            for _attr in ("image", "child", "base", "mask"):
-                _path = _walk(getattr(_obj, _attr, None))
-                if _path:
-                    return _path
+            for attr in ("image", "child", "base", "mask"):
+                path = _walk(getattr(obj, attr, None))
+                if path:
+                    return path
 
-            for _attr in ("images", "children"):
-                _vals = getattr(_obj, _attr, None)
-                if isinstance(_vals, (list, tuple)):
-                    for _item in _vals:
-                        _path = _walk(_item)
-                        if _path:
-                            return _path
+            for attr in ("images", "children"):
+                vals = getattr(obj, attr, None)
+                if isinstance(vals, (list, tuple)):
+                    for item in vals:
+                        path = _walk(item)
+                        if path:
+                            return path
 
             ## ATL animation: eval the first image expression from the raw ATL block.
-            _atl = getattr(_obj, "atl", None)
-            if _atl is not None:
-                for _stmt in (getattr(_atl, "statements", None) or []):
-                    for _expr_str, _ in (getattr(_stmt, "expressions", None) or []):
+            atl = getattr(obj, "atl", None)
+            if atl is not None:
+                for stmt in (getattr(atl, "statements", None) or []):
+                    for expr_str, _ in (getattr(stmt, "expressions", None) or []):
                         try:
-                            _evaled = renpy.python.py_eval(_expr_str)
+                            evaled = renpy.python.py_eval(expr_str)
                         except Exception:
                             continue
-                        if _tl_is_supported_thumb_file(_evaled) and renpy.loadable(_evaled):
-                            return _evaled
-                        _path = _walk(_evaled)
-                        if _path:
-                            return _path
+                        if _tl_is_supported_thumb_file(evaled) and renpy.loadable(evaled):
+                            return evaled
+                        path = _walk(evaled)
+                        if path:
+                            return path
 
             return None
 
-        _path = _walk(_root)
-        _tl_asset_thumb_file_cache[img_name] = _path
-        return _path
+        result = _walk(root)
+        _tl_asset_thumb_file_cache[img_name] = result
+        return result
 
     def _tl_render_asset_thumb_bytes(img_name, width=None, height=None, fit_mode="cover"):
         """Generate thumbnail bytes from a plain file-backed registered image."""
         if not img_name:
             return None
-        _w = width or TL_THUMB_WIDTH
-        _h = height or TL_THUMB_HEIGHT
+        thumb_w = width or TL_THUMB_WIDTH
+        thumb_h = height or TL_THUMB_HEIGHT
         try:
-            import tempfile as _tf
-            import pygame as _pg
-            _path = _tl_resolve_asset_file(img_name)
-            if not _path:
+            import tempfile
+            import pygame
+            asset_path = _tl_resolve_asset_file(img_name)
+            if not asset_path:
                 return None
 
-            with renpy.loader.load(_path) as _f:
-                _src = renpy.display.pgrender.load_image(_f, _path)
+            with renpy.loader.load(asset_path) as f:
+                src_surf = renpy.display.pgrender.load_image(f, asset_path)
 
-            _sw, _sh = _src.get_size()
-            if not _sw or not _sh:
+            src_w, src_h = src_surf.get_size()
+            if not src_w or not src_h:
                 return None
 
             if fit_mode == "cover":
-                _scale = _TL_MAX(float(_w) / float(_sw), float(_h) / float(_sh))
+                scale = _TL_MAX(float(thumb_w) / float(src_w), float(thumb_h) / float(src_h))
             else:
-                _scale = _TL_MIN(float(_w) / float(_sw), float(_h) / float(_sh))
+                scale = _TL_MIN(float(thumb_w) / float(src_w), float(thumb_h) / float(src_h))
 
-            _tw = _TL_MAX(1, int(round(_sw * _scale)))
-            _th = _TL_MAX(1, int(round(_sh * _scale)))
+            scaled_w = _TL_MAX(1, int(round(src_w * scale)))
+            scaled_h = _TL_MAX(1, int(round(src_h * scale)))
 
             try:
                 renpy.display.render.blit_lock.acquire()
-                _scaled = renpy.display.scale.smoothscale(_src, (_tw, _th))
+                scaled = renpy.display.scale.smoothscale(src_surf, (scaled_w, scaled_h))
             finally:
                 renpy.display.render.blit_lock.release()
 
-            _surf = renpy.display.pgrender.surface((_w, _h), True)
+            surf = renpy.display.pgrender.surface((thumb_w, thumb_h), True)
             if fit_mode == "cover":
-                _sx = _TL_MAX(0, int(round((_tw - _w) / 2.0)))
-                _sy = _TL_MAX(0, int(round((_th - _h) / 2.0)))
-                _crop = _scaled.subsurface((_sx, _sy, _TL_MIN(_w, _tw - _sx), _TL_MIN(_h, _th - _sy)))
-                _surf.blit(_crop, (0, 0))
+                crop_x = _TL_MAX(0, int(round((scaled_w - thumb_w) / 2.0)))
+                crop_y = _TL_MAX(0, int(round((scaled_h - thumb_h) / 2.0)))
+                crop = scaled.subsurface((crop_x, crop_y, _TL_MIN(thumb_w, scaled_w - crop_x), _TL_MIN(thumb_h, scaled_h - crop_y)))
+                surf.blit(crop, (0, 0))
             else:
-                _dx = _TL_MAX(0, int(round((_w - _tw) / 2.0)))
-                _dy = _TL_MAX(0, int(round((_h - _th) / 2.0)))
-                _surf.blit(_scaled, (_dx, _dy))
+                dst_x = _TL_MAX(0, int(round((thumb_w - scaled_w) / 2.0)))
+                dst_y = _TL_MAX(0, int(round((thumb_h - scaled_h) / 2.0)))
+                surf.blit(scaled, (dst_x, dst_y))
 
-            if _surf is None:
+            if surf is None:
                 return None
-            _tmp = _tf.mktemp(suffix=".png")
+            tmp_path = tempfile.mktemp(suffix=".png")
             try:
-                _pg.image.save(_surf, _tmp)
-                with open(_tmp, "rb") as _f:
-                    return _f.read()
+                pygame.image.save(surf, tmp_path)
+                with open(tmp_path, "rb") as f:
+                    return f.read()
             finally:
                 try:
-                    os.unlink(_tmp)
+                    os.unlink(tmp_path)
                 except Exception:
                     pass
         except Exception as e:
@@ -297,24 +299,24 @@ init -2 python:
 
     def _tl_get_asset_thumb_bytes(img_name, generate=False, width=None, height=None, fit_mode="cover"):
         """Return cached static thumbnail bytes for an img_name, optionally generating them."""
-        _key = _tl_asset_thumb_cache_key(img_name, width, height, fit_mode)
-        if not _key:
+        cache_key = _tl_asset_thumb_cache_key(img_name, width, height, fit_mode)
+        if not cache_key:
             return None
-        _cache = getattr(renpy.game, "_tl_asset_thumb_cache", {})
-        _bytes = _cache.get(_key)
-        if _bytes is not None:
+        cache = getattr(renpy.game, "_tl_asset_thumb_cache", {})
+        thumb_bytes = cache.get(cache_key)
+        if thumb_bytes is not None:
             if TL_DEBUG_ASSET:
                 _tl_log("TL asset thumb hit: img_name={}".format(img_name))
-            return _bytes
+            return thumb_bytes
         if not generate or _tl_img_name_is_movie(img_name):
             return None
-        _bytes = _tl_render_asset_thumb_bytes(img_name, width, height, fit_mode)
-        if _bytes:
-            _cache[_key] = _bytes
+        thumb_bytes = _tl_render_asset_thumb_bytes(img_name, width, height, fit_mode)
+        if thumb_bytes:
+            cache[cache_key] = thumb_bytes
             persistent._tl_asset_thumb_dirty = True
             if TL_DEBUG_ASSET:
                 _tl_log("TL asset thumb generated: img_name={}".format(img_name))
-        return _bytes
+        return thumb_bytes
 
     def _tl_resolve_live_menu_img_name():
         """
@@ -323,21 +325,21 @@ init -2 python:
         topmost registered image on master.
         """
         try:
-            _master = renpy.game.context().scene_lists.layers.get("master", []) or []
+            master = renpy.game.context().scene_lists.layers.get("master", []) or []
         except Exception as e:
             _tl_log("TL live img_name scene_lists failed: {}".format(e))
             return None
 
-        _fallback = None
-        for _entry in reversed(_master):
-            _img_name = _tl_live_scene_entry_img_name(_entry)
-            if not _img_name:
+        fallback = None
+        for entry in reversed(master):
+            img_name = _tl_live_scene_entry_img_name(entry)
+            if not img_name:
                 continue
-            if _fallback is None:
-                _fallback = _img_name
-            if getattr(_entry, "tag", None) == "bg":
-                return _img_name
-        return _fallback
+            if fallback is None:
+                fallback = img_name
+            if getattr(entry, "tag", None) == "bg":
+                return img_name
+        return fallback
 
     def _tl_thumb_displayable(thumb_bytes, index):
         try:
@@ -361,41 +363,41 @@ init -2 python:
         if b:
             return b
         key = str(node["ast_key"]) if node.get("ast_key") else None
-        _tc = getattr(renpy.game, "_tl_thumb_cache", {})
-        return _tc.get(key) if key else None
+        thumb_cache = getattr(renpy.game, "_tl_thumb_cache", {})
+        return thumb_cache.get(key) if key else None
 
     def _tl_img_thumb_displayable(img_name, width, height, fit_mode="cover"):
         """Return a cached displayable for an asset-backed timeline thumbnail."""
-        _cache_key = _tl_asset_thumb_display_cache_key(img_name, width, height, fit_mode)
-        if _cache_key and _cache_key in _tl_asset_thumb_displayable_cache:
-            return _tl_asset_thumb_displayable_cache[_cache_key]
-        _asset_thumb = _tl_get_asset_thumb_bytes(
+        cache_key = _tl_asset_thumb_display_cache_key(img_name, width, height, fit_mode)
+        if cache_key and cache_key in _tl_asset_thumb_displayable_cache:
+            return _tl_asset_thumb_displayable_cache[cache_key]
+        asset_thumb = _tl_get_asset_thumb_bytes(
             img_name,
             generate=True,
             width=TL_THUMB_WIDTH,
             height=TL_THUMB_HEIGHT,
             fit_mode="cover",
         )
-        if _asset_thumb:
-            _base = _tl_thumb_displayable(_asset_thumb, _tl_asset_thumb_display_id(img_name))
+        if asset_thumb:
+            base = _tl_thumb_displayable(asset_thumb, _tl_asset_thumb_display_id(img_name))
         elif _tl_resolve_asset_file(img_name):
             ## Safe fallback for plain file-backed images when thumb generation misses.
-            _base = img_name
+            base = img_name
         else:
             ## Dynamic images (for example ConditionSwitch / composites) are not safe
             ## to render directly inside the timeline screen.
             return None
-        _disp = Transform(
-            _base,
+        disp = Transform(
+            base,
             xsize=width,
             ysize=height,
             fit=fit_mode,
             xalign=0.5,
             yalign=0.5,
         )
-        if _cache_key:
-            _tl_asset_thumb_displayable_cache[_cache_key] = _disp
-        return _disp
+        if cache_key:
+            _tl_asset_thumb_displayable_cache[cache_key] = disp
+        return disp
 
     def _tl_clear_thumb_cache():
         renpy.game._tl_thumb_cache      = {}
@@ -416,27 +418,27 @@ init -2 python:
         """
         if persistent._tl_menu_scene_map is None:
             persistent._tl_menu_scene_map = {}
-        _new_entries = [0]
+        new_entries = [0]
 
-        def _visitor(_node, _last_img, _label=None):
-            _nt = type(_node).__name__
-            if _nt in ("Scene", "Show"):
-                _img = _tl_scene_stmt_img_name(_node)
-                if _img:
-                    return _img
-            elif _nt == "Menu":
-                _mk = _tl_menu_site_key(_node.filename, _node.linenumber)
-                if _mk and _mk not in persistent._tl_menu_scene_map:
-                    if _last_img:
-                        persistent._tl_menu_scene_map[_mk] = _last_img
-                        _new_entries[0] += 1
+        def visitor(node, last_img, _label=None):
+            node_type = type(node).__name__
+            if node_type in ("Scene", "Show"):
+                img = _tl_scene_stmt_img_name(node)
+                if img:
+                    return img
+            elif node_type == "Menu":
+                menu_key = _tl_menu_site_key(node.filename, node.linenumber)
+                if menu_key and menu_key not in persistent._tl_menu_scene_map:
+                    if last_img:
+                        persistent._tl_menu_scene_map[menu_key] = last_img
+                        new_entries[0] += 1
                     else:
                         if TL_DEBUG_ASSET:
                             _tl_log("TL ast-walk miss: menu=({},{}) last_img=None".format(
-                                _node.filename, _node.linenumber))
-            return _last_img
+                                node.filename, node.linenumber))
+            return last_img
 
-        _tl_walk_ast_blocks(nodes, _visitor, initial_state=None)
-        if _new_entries[0] and TL_DEBUG_ASSET:
-            _tl_log("TL menu_scene_map: {} new entries cached".format(_new_entries[0]))
+        _tl_walk_ast_blocks(nodes, visitor, initial_state=None)
+        if new_entries[0] and TL_DEBUG_ASSET:
+            _tl_log("TL menu_scene_map: {} new entries cached".format(new_entries[0]))
 

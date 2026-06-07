@@ -43,6 +43,47 @@ init python:
         current      = "_dummy_label_99999_"
         interacting  = False
 
+    class _TLFakeChoice(object):
+        """Minimal ChoiceReturn stub for tests. chosen=True makes get_chosen() return True."""
+        def __init__(self, chosen=False, value=None):
+            self._chosen = chosen
+            self._value  = value
+        def get_chosen(self):
+            return self._chosen
+        @property
+        def value(self):
+            return self._value
+        def __call__(self):
+            return self._value
+
+    class _TLStateGuard(object):
+        """
+        Context manager: save store/persistent vars on entry, restore on exit.
+        store_vals / pers_vals map variable names to the values to set for the test.
+        """
+        def __init__(self, store_vals=None, pers_vals=None):
+            self._store_vals  = store_vals or {}
+            self._pers_vals   = pers_vals or {}
+            self._saved_store = {}
+            self._saved_pers  = {}
+
+        def __enter__(self):
+            import store as _st
+            for key, new_val in self._store_vals.items():
+                self._saved_store[key] = getattr(_st, key, None)
+                setattr(_st, key, new_val)
+            for key, new_val in self._pers_vals.items():
+                self._saved_pers[key] = getattr(persistent, key, None)
+                setattr(persistent, key, new_val)
+            return self
+
+        def __exit__(self, *_):
+            import store as _st
+            for key, old_val in self._saved_store.items():
+                setattr(_st, key, old_val)
+            for key, old_val in self._saved_pers.items():
+                setattr(persistent, key, old_val)
+
     ## ─────────────────────────────────────────────────────────────────────────
     ## Micro test framework
     ## ─────────────────────────────────────────────────────────────────────────
@@ -99,7 +140,6 @@ init python:
         r.check(s, "_tl_history is list",              isinstance(_tl_history, list))
         r.check(s, "_tl_context is list",              isinstance(_tl_context, list))
         r.check(s, "_tl_node_count is int",            isinstance(_tl_node_count, int))
-        r.check(s, "_tl_branch_id is str",             isinstance(_tl_branch_id, str))
         r.check(s, "_tl_modal_node is None",           _tl_modal_node is None)
         r.check(s, "_tl_load_slot is str",             isinstance(_tl_load_slot, str))
         r.check(s, "_tl_ast_ready is bool",            isinstance(_tl_ast_ready, bool))
@@ -193,164 +233,112 @@ init python:
         """
         s = "record_pipeline"
 
-        # Fake menu items as RenPy passes them: (label, condition, value)
-        class FakeChoiceReturn(object):
-            def __init__(self):
-                self._chosen = False
-            def get_chosen(self):
-                return self._chosen
-            @property
-            def value(self):
-                return "choice_a_value"
-
-        cr = FakeChoiceReturn()
+        cr = _TLFakeChoice(value="choice_a_value")
         fake_items = [
-            ("What do you want?", True, None),     # prompt (value=None)
-            ("Choice A", True, cr),                 # option
-            ("Choice B", True, "choice_b_value"),   # option
+            ("What do you want?", True, None),  # prompt (value=None)
+            ("Choice A", True, cr),              # option
+            ("Choice B", True, "choice_b_value"),
         ]
 
-        # Save real state
-        saved_history     = list(_tl_history)
-        saved_count       = _tl_node_count
-        saved_context     = list(_tl_context)
-        saved_replaying   = persistent._tl_replaying
-        saved_ghost_nodes = list(getattr(store, "_tl_ghost_nodes", []))
-
         try:
-            persistent._tl_replaying = False
-            store._tl_history    = []
-            store._tl_node_count = 0
-            store._tl_context    = []
-            store._tl_branch_id  = ""
+            with _TLStateGuard(
+                store_vals={
+                    "_tl_history"    : [],
+                    "_tl_node_count" : 0,
+                    "_tl_context"    : [],
+                    "_tl_ghost_nodes": [{"type": "branch", "dummy": True}],
+                },
+                pers_vals={"_tl_replaying": False},
+            ):
+                node = _tl_record_before(fake_items)
 
-            # Pre-populate ghost nodes so we can verify they are cleared
-            store._tl_ghost_nodes = [{"type": "branch", "dummy": True}]
+                r.check(s, "ghost_nodes cleared on record_before", store._tl_ghost_nodes == [])
+                r.check(s, "record_before returns dict",  isinstance(node, dict))
+                r.check(s, "node has index 0",            node["index"] == 0)
+                r.check(s, "node has 2 options",          len(node["options"]) == 2)
+                r.check(s, "prompt extracted",            node["prompt"] == "What do you want?")
+                r.check(s, "chosen_index is None",        node.get("chosen_index") is None)
+                r.check(s, "history has 1 entry",         len(_tl_history) == 1)
+                r.check(s, "node_count incremented",      _tl_node_count == 1)
 
-            node = _tl_record_before(fake_items)
+                _tl_record_after(node, "Choice A")
 
-            r.check(s, "ghost_nodes cleared on record_before", store._tl_ghost_nodes == [])
-            r.check(s, "record_before returns dict",  isinstance(node, dict))
-            r.check(s, "node has index 0",            node["index"] == 0)
-            r.check(s, "node has 2 options",          len(node["options"]) == 2)
-            r.check(s, "prompt extracted",            node["prompt"] == "What do you want?")
-            r.check(s, "chosen_index is None",        node.get("chosen_index") is None)
-            r.check(s, "history has 1 entry",         len(_tl_history) == 1)
-            r.check(s, "node_count incremented",      _tl_node_count == 1)
-
-            # Now record the choice
-            _tl_record_after(node, "Choice A")
-
-            r.check(s, "chosen_index set",            node.get("chosen_index") == 0)
-            r.check(s, "context updated",             len(_tl_context) == 1)
-            r.check(s, "context entry correct",
-                _tl_context[0] == ("What do you want?", 0))
+                r.check(s, "chosen_index set",   node.get("chosen_index") == 0)
+                r.check(s, "context updated",    len(_tl_context) == 1)
+                r.check(s, "context entry correct",
+                    _tl_context[0] == ("What do you want?", 0))
 
         except Exception as e:
             r.check(s, "no exception", False, str(e))
-        finally:
-            # Restore real state
-            store._tl_history     = saved_history
-            store._tl_node_count  = saved_count
-            store._tl_context     = saved_context
-            persistent._tl_replaying = saved_replaying
-            store._tl_ghost_nodes = saved_ghost_nodes
 
 
     def _tl_test_locked_options(r):
         """Locked items (entry[2] is False) must be excluded from node["options"]."""
         s = "locked_options"
 
-        class FakeCR(object):
-            def get_chosen(self): return False
-
         fake_items = [
-            ("Pick one:", True, None),          # prompt
-            ("Available A", True, FakeCR()),    # available
-            ("Locked B", False, False),         # locked — must be excluded
-            ("Available C", True, FakeCR()),    # available
+            ("Pick one:", True, None),                  # prompt
+            ("Available A", True, _TLFakeChoice()),     # available
+            ("Locked B", False, False),                 # locked — must be excluded
+            ("Available C", True, _TLFakeChoice()),     # available
         ]
 
-        saved_history   = list(_tl_history)
-        saved_count     = _tl_node_count
-        saved_context   = list(_tl_context)
-        saved_replaying = persistent._tl_replaying
-
         try:
-            persistent._tl_replaying = False
-            store._tl_history    = []
-            store._tl_node_count = 0
-            store._tl_context    = []
-            store._tl_branch_id  = ""
+            with _TLStateGuard(
+                store_vals={
+                    "_tl_history"    : [],
+                    "_tl_node_count" : 0,
+                    "_tl_context"    : [],
+                },
+                pers_vals={"_tl_replaying": False},
+            ):
+                node = _tl_record_before(fake_items)
 
-            node = _tl_record_before(fake_items)
-
-            r.check(s, "returns dict",               isinstance(node, dict))
-            r.check(s, "locked option excluded",     "Locked B" not in node["options"])
-            r.check(s, "available options present",  node["options"] == ["Available A", "Available C"])
-            r.check(s, "option count is 2",          len(node["options"]) == 2)
+                r.check(s, "returns dict",              isinstance(node, dict))
+                r.check(s, "locked option excluded",    "Locked B" not in node["options"])
+                r.check(s, "available options present", node["options"] == ["Available A", "Available C"])
+                r.check(s, "option count is 2",         len(node["options"]) == 2)
 
         except Exception as e:
             r.check(s, "no exception", False, str(e))
-        finally:
-            store._tl_history     = saved_history
-            store._tl_node_count  = saved_count
-            store._tl_context     = saved_context
-            persistent._tl_replaying = saved_replaying
 
 
     def _tl_test_option_filtering(r):
         """_tl_record_before filters options by evaluated condition at record time."""
         s = "option_filtering"
 
-        class FakeCR(object):
-            def get_chosen(self): return False
+        _fresh_state = {
+            "_tl_history"   : [],
+            "_tl_node_count": 0,
+            "_tl_context"   : [],
+        }
 
         def _run(items):
-            saved_history   = list(_tl_history)
-            saved_count     = _tl_node_count
-            saved_context   = list(_tl_context)
-            saved_replaying = persistent._tl_replaying
-            try:
-                persistent._tl_replaying = False
-                store._tl_history    = []
-                store._tl_node_count = 0
-                store._tl_context    = []
-                store._tl_branch_id  = ""
+            with _TLStateGuard(store_vals=_fresh_state, pers_vals={"_tl_replaying": False}):
                 return _tl_record_before(items)
-            finally:
-                store._tl_history     = saved_history
-                store._tl_node_count  = saved_count
-                store._tl_context     = saved_context
-                persistent._tl_replaying = saved_replaying
 
-        # boolean True cond → included
-        node = _run([("Q", None, None), ("Yes", True, FakeCR())])
+        cr = _TLFakeChoice()
+
+        node = _run([("Q", None, None), ("Yes", True, cr)])
         r.check(s, "bool True cond included", node is not None and "Yes" in node["options"])
 
-        # boolean False cond → excluded
-        node = _run([("Q", None, None), ("Locked", False, False), ("Open", True, FakeCR())])
+        node = _run([("Q", None, None), ("Locked", False, False), ("Open", True, cr)])
         r.check(s, "bool False cond excluded",  node is not None and "Locked" not in node["options"])
         r.check(s, "available still present",   node is not None and "Open" in node["options"])
 
-        # string "True" cond → included
-        node = _run([("Q", None, None), ("StrTrue", "True", FakeCR())])
+        node = _run([("Q", None, None), ("StrTrue", "True", cr)])
         r.check(s, "string True cond included", node is not None and "StrTrue" in node["options"])
 
-        # string "False" cond → excluded
-        node = _run([("Q", None, None), ("StrFalse", "False", False), ("Open", True, FakeCR())])
+        node = _run([("Q", None, None), ("StrFalse", "False", False), ("Open", True, cr)])
         r.check(s, "string False cond excluded", node is not None and "StrFalse" not in node["options"])
 
-        # None cond with block → included (unconditional choice)
-        node = _run([("Q", None, None), ("Uncond", None, FakeCR())])
+        node = _run([("Q", None, None), ("Uncond", None, cr)])
         r.check(s, "None cond with block included", node is not None and "Uncond" in node["options"])
 
-        # all options locked → returns None
         result = _run([("Q", None, None), ("A", False, False), ("B", False, False)])
         r.check(s, "all locked returns None", result is None)
 
-        # block=None → prompt, not an option
-        node = _run([("Prompt text", None, None), ("Pick", True, FakeCR())])
+        node = _run([("Prompt text", None, None), ("Pick", True, cr)])
         r.check(s, "block=None is prompt not option", node is not None and "Prompt text" not in node["options"])
         r.check(s, "prompt extracted correctly",      node is not None and node["prompt"] == "Prompt text")
 
@@ -359,21 +347,15 @@ init python:
         """_tl_node_has_new uses _choice_returns when available."""
         s = "node_has_new"
 
-        class FakeCR(object):
-            def __init__(self, chosen):
-                self._chosen = chosen
-            def get_chosen(self):
-                return self._chosen
-
         node_all_seen = {
             "index": 0, "options": ["A", "B"], "prompt": "?",
             "chosen_index": 0, "ast_key": None,
-            "_choice_returns": [FakeCR(True), FakeCR(True)],
+            "_choice_returns": [_TLFakeChoice(True), _TLFakeChoice(True)],
         }
         node_has_new = {
             "index": 0, "options": ["A", "B"], "prompt": "?",
             "chosen_index": 0, "ast_key": None,
-            "_choice_returns": [FakeCR(True), FakeCR(False)],
+            "_choice_returns": [_TLFakeChoice(True), _TLFakeChoice(False)],
         }
         node_no_cr = {
             "index": 0, "options": ["A", "B"], "prompt": "?",
@@ -876,7 +858,7 @@ init python:
             _idx = _n.get("index")
             if _idx is None or _tl_get_menu_snapshot(_idx) is not None:
                 continue
-            _ak = _tl_derive_node_menu_site_key(_n) if _tl_derive_node_menu_site_key else None
+            _ak = _tl_node_menu_site_key(_n) if _tl_node_menu_site_key else None
             if _find(_idx, list(store._tl_context), _ak) is not None:
                 _target = _n
                 break
@@ -1319,6 +1301,124 @@ init python:
             _tl_chapters.update(saved_chapters)
 
 
+    ## ─────────────────────────────────────────────────────────────────────────
+    ## Ghost card in-game tests
+    ## ─────────────────────────────────────────────────────────────────────────
+
+    def _tl_test_ghost_gate_guards(r):
+        """Replaying and skipping gates block ghost emission from _tl_on_if_execute."""
+        s = "ghost_gate_guards"
+
+        ## Find any game-file If node to use as a subject.
+        if_node = None
+        try:
+            for node in renpy.game.script.namemap.values():
+                if (type(node).__name__ == "If"
+                        and _tl_is_game_file(getattr(node, "filename", ""))
+                        and len(getattr(node, "entries", [])) > 1):
+                    if_node = node
+                    break
+        except Exception as e:
+            r.check(s, "namemap accessible", False, str(e))
+            return
+
+        if if_node is None:
+            r.check(s, "skipped: no multi-branch game If node found", True)
+            return
+
+        ## Gate 1: replaying blocks emission.
+        try:
+            with _TLStateGuard(
+                store_vals={"_tl_ghost_nodes": [], "_tl_skip_ghost_ifs": set()},
+                pers_vals={"_tl_replaying": True},
+            ):
+                _tl_on_if_execute(if_node, 0)
+                r.check(s, "replaying blocks ghost emission",
+                        store._tl_ghost_nodes == [])
+        except Exception as e:
+            r.check(s, "replaying gate no exception", False, str(e))
+
+        ## Gate 2: config.skipping blocks emission.
+        saved_skipping = config.skipping
+        try:
+            with _TLStateGuard(
+                store_vals={"_tl_ghost_nodes": [], "_tl_skip_ghost_ifs": set()},
+                pers_vals={"_tl_replaying": False},
+            ):
+                config.skipping = True
+                _tl_on_if_execute(if_node, 0)
+                r.check(s, "skipping blocks ghost emission",
+                        store._tl_ghost_nodes == [])
+        except Exception as e:
+            r.check(s, "skipping gate no exception", False, str(e))
+        finally:
+            config.skipping = saved_skipping
+
+
+    def _tl_test_ghost_on_if_execute(r):
+        """
+        _tl_on_if_execute with a real game If node appends to store._tl_ghost_nodes
+        and writes the persistent cache entry.
+        """
+        s = "ghost_on_if_execute"
+
+        ## Find a game If node with at least 2 branches (so payload is not None).
+        if_node = None
+        try:
+            for node in renpy.game.script.namemap.values():
+                if (type(node).__name__ == "If"
+                        and _tl_is_game_file(getattr(node, "filename", ""))
+                        and len(getattr(node, "entries", [])) >= 2):
+                    if_node = node
+                    break
+        except Exception as e:
+            r.check(s, "namemap accessible", False, str(e))
+            return
+
+        if if_node is None:
+            r.check(s, "skipped: no suitable game If node", True,
+                    "play further to load more script nodes")
+            return
+
+        saved_cache = (persistent._tl_ghost_node_cache or {}).copy()
+        try:
+            with _TLStateGuard(
+                store_vals={"_tl_ghost_nodes": [], "_tl_skip_ghost_ifs": set()},
+                pers_vals={"_tl_replaying": False, "_tl_ghost_node_cache": {}},
+            ):
+                _tl_on_if_execute(if_node, 0)
+
+                r.check(s, "ghost_nodes populated",
+                        len(store._tl_ghost_nodes) >= 1)
+
+                if store._tl_ghost_nodes:
+                    node_dict = store._tl_ghost_nodes[0]
+                    r.check(s, "ghost node has ast_key",
+                            "ast_key" in node_dict)
+                    r.check(s, "ghost node has taken_index",
+                            "taken_index" in node_dict)
+                    r.check(s, "ghost node has branch_imgs",
+                            "branch_imgs" in node_dict)
+                    r.check(s, "ghost node cluster_with_prev is bool",
+                            isinstance(node_dict.get("cluster_with_prev"), bool))
+
+                cache_key = str((if_node.filename, if_node.linenumber))
+                r.check(s, "persistent cache entry written",
+                        cache_key in (persistent._tl_ghost_node_cache or {}))
+
+                if cache_key in (persistent._tl_ghost_node_cache or {}):
+                    cached = persistent._tl_ghost_node_cache[cache_key]
+                    r.check(s, "cache entry has conditions",
+                            isinstance(cached.get("conditions"), list))
+                    r.check(s, "cache entry has seen_fns",
+                            isinstance(cached.get("seen_fns"), list))
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            persistent._tl_ghost_node_cache = saved_cache
+
+
     def _tl_run_tests():
         r = _TLTestResults()
 
@@ -1354,6 +1454,8 @@ init python:
         _tl_test_jump_empty_shadow(r)
         _tl_test_cancel_jump(r)
         _tl_test_jump_chapter_staging(r)
+        _tl_test_ghost_gate_guards(r)
+        _tl_test_ghost_on_if_execute(r)
         # Write results to debug.txt (renpy-chronology-mod/debug.txt via _tl_log)
         _tl_log("=" * 60)
         _tl_log("CHRONOLOGY TEST RUN")

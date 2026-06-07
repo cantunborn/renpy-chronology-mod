@@ -8,9 +8,10 @@ init -2 python:
     def _tl_find_scene_seen_name(start_node, max_hops=80):
         """Find the first translated say-name reachable after a scene node."""
         try:
-            _translator = renpy.game.script.translator
-        except Exception:
-            _translator = None
+            translator = renpy.game.script.translator
+        except Exception as e:
+            _tl_log("TL find_scene_seen_name: translator unavailable: {}".format(e))
+            translator = None
         node = start_node
         hops = 0
         while node is not None and hops < max_hops:
@@ -30,17 +31,18 @@ init -2 python:
         Older RenPy: return node.name tuple; eval checks _seen_ever directly.
         Translated games: resolve to TranslateSay node for old RenPy fallback.
         """
-        _ident = getattr(node, "identifier", None)
-        if _ident and getattr(renpy, "seen_translation", None):
-            return _ident
+        ident = getattr(node, "identifier", None)
+        if ident and getattr(renpy, "seen_translation", None):
+            return ident
         ## Old RenPy: resolve translator node for translated games, fall back to node.
         try:
-            _translator = renpy.game.script.translator
-        except Exception:
-            _translator = None
-        _tr = _translator.lookup_translate(_ident) if (_translator and _ident) else None
-        _seen_node = _tr if (_tr is not None and not isinstance(_tr, tuple)) else node
-        return getattr(_seen_node, "name", None) or getattr(node, "name", None)
+            translator = renpy.game.script.translator
+        except Exception as e:
+            _tl_log("TL say_seen_name: translator unavailable: {}".format(e))
+            translator = None
+        translated_node = translator.lookup_translate(ident) if (translator and ident) else None
+        seen_node = translated_node if (translated_node is not None and not isinstance(translated_node, tuple)) else node
+        return getattr(seen_node, "name", None) or getattr(node, "name", None)
 
     def _tl_follow_jump_seen_name(target, max_hops=30):
         """Follow a Jump/Call target label one hop and return the first Say's
@@ -52,22 +54,22 @@ init -2 python:
         the target label in a different locale.
         """
         try:
-            _namemap = renpy.game.script.namemap
-            _label_node = _namemap.get(target)
-            if _label_node is None:
+            namemap = renpy.game.script.namemap
+            label_node = namemap.get(target)
+            if label_node is None:
                 return None
-            _node = getattr(_label_node, "next", None)
-            _hops = 0
-            while _node is not None and _hops < max_hops:
-                _stype = type(_node).__name__
-                if _stype in ("Say", "TranslateSay"):
-                    return _tl_say_seen_name(_node)
-                if _stype in ("Jump", "Call", "Return", "Menu", "Label"):
+            node = getattr(label_node, "next", None)
+            hops = 0
+            while node is not None and hops < max_hops:
+                node_type = type(node).__name__
+                if node_type in ("Say", "TranslateSay"):
+                    return _tl_say_seen_name(node)
+                if node_type in ("Jump", "Call", "Return", "Menu", "Label"):
                     return None
-                _node = getattr(_node, "next", None)
-                _hops += 1
-        except Exception:
-            pass
+                node = getattr(node, "next", None)
+                hops += 1
+        except Exception as e:
+            _tl_log("TL follow_jump_seen_name failed for '{}': {}".format(target, e))
         return None
 
     def _tl_first_scene_seen_name(block):
@@ -108,88 +110,88 @@ init -2 python:
         if not block:
             return ("never",)
 
-        _say_first  = None   ## first Say/TranslateSay resolved name
-        _say_last   = None   ## last Say/TranslateSay resolved name (overwritten each time)
-        _scene_best = None   ## first Scene background — image fallback
-        _show_best  = None   ## first expr-Show — ParameterizedText fallback
+        say_first  = None   ## first Say/TranslateSay resolved name
+        say_last   = None   ## last Say/TranslateSay resolved name (overwritten each time)
+        scene_best = None   ## first Scene background — image fallback
+        show_best  = None   ## first expr-Show — ParameterizedText fallback
 
         def _make_say_result():
-            if _say_first is None:
+            if say_first is None:
                 return None
-            if _say_last != _say_first:
-                return ("say_range", _say_first, _say_last)
-            return ("say", _say_first)
+            if say_last != say_first:
+                return ("say_range", say_first, say_last)
+            return ("say", say_first)
 
-        for _node in block:
-            _stype = type(_node).__name__
-            if _stype in ("Say", "TranslateSay"):
-                _key = _tl_say_seen_name(_node)
-                if _key is not None:
-                    if _say_first is None:
-                        _say_first = _key
-                    _say_last = _key
-            elif _stype == "Scene" and _scene_best is None:
-                _img = _tl_scene_stmt_img_name(_node)
-                if _img:
-                    _scene_best = ("image", tuple(_img.split()))
-            elif _stype == "Show" and _show_best is None:
-                _sp = getattr(_node, "imspec", None)
-                if _sp and _sp[0]:
-                    _parts = tuple(str(_p) for _p in _sp[0])
+        for node in block:
+            node_type = type(node).__name__
+            if node_type in ("Say", "TranslateSay"):
+                seen_key = _tl_say_seen_name(node)
+                if seen_key is not None:
+                    if say_first is None:
+                        say_first = seen_key
+                    say_last = seen_key
+            elif node_type == "Scene" and scene_best is None:
+                img = _tl_scene_stmt_img_name(node)
+                if img:
+                    scene_best = ("image", tuple(img.split()))
+            elif node_type == "Show" and show_best is None:
+                imspec = getattr(node, "imspec", None)
+                if imspec and imspec[0]:
+                    parts = tuple(str(p) for p in imspec[0])
                     ## Only use for shows whose name contains expression args (has '(').
                     ## Plain shows like `show eileen happy` are character overlays shared
                     ## across many branches — branch-ambiguous, skip them.
                     ## _seen_images stores raw imspec parts as-is, so no eval needed.
-                    if any("(" in _p for _p in _parts):
-                        _show_best = ("image", _parts)
-            elif _stype == "Jump":
-                _target = getattr(_node, "target", None)
-                _followed = _tl_follow_jump_seen_name(_target) if _target else None
-                _lbl = ("say", _followed) if _followed else (("label", _target) if _target else ("never",))
-                return _make_say_result() or _scene_best or _show_best or _lbl
-            elif _stype == "Call":
-                _target = getattr(_node, "label", None) if isinstance(getattr(_node, "label", None), str) else None
-                _followed = _tl_follow_jump_seen_name(_target) if _target else None
-                _lbl = ("say", _followed) if _followed else (("label", _target) if _target else ("never",))
-                return _make_say_result() or _scene_best or _show_best or _lbl
-            elif _stype in ("Return", "Menu"):
-                return _make_say_result() or _scene_best or _show_best or ("never",)
+                    if any("(" in p for p in parts):
+                        show_best = ("image", parts)
+            elif node_type == "Jump":
+                target = getattr(node, "target", None)
+                followed = _tl_follow_jump_seen_name(target) if target else None
+                result_lbl = ("say", followed) if followed else (("label", target) if target else ("never",))
+                return _make_say_result() or scene_best or show_best or result_lbl
+            elif node_type == "Call":
+                target = getattr(node, "label", None) if isinstance(getattr(node, "label", None), str) else None
+                followed = _tl_follow_jump_seen_name(target) if target else None
+                result_lbl = ("say", followed) if followed else (("label", target) if target else ("never",))
+                return _make_say_result() or scene_best or show_best or result_lbl
+            elif node_type in ("Return", "Menu"):
+                return _make_say_result() or scene_best or show_best or ("never",)
             ## Python, If, With, plain Show, etc — skip
-        return _make_say_result() or _scene_best or _show_best or ("never",)
+        return _make_say_result() or scene_best or show_best or ("never",)
 
     def _tl_make_scene_seen_fn(block):
         """Build a scene-based seen descriptor for branch/ghost checks."""
-        _seen_name = _tl_first_scene_seen_name(block)
-        if _seen_name:
-            return ("say", _seen_name)
+        seen_name = _tl_first_scene_seen_name(block)
+        if seen_name:
+            return ("say", seen_name)
         return ("never",)
 
     def _tl_eval_seen_fn(seen_fn):
         """Evaluate a seen_fn descriptor tuple against live RenPy state."""
         try:
             if seen_fn[0] == "say":
-                _key = seen_fn[1]
-                if isinstance(_key, str):
-                    return renpy.seen_translation(_key)
-                return bool(_key in (persistent._seen_ever or {}))
+                seen_key = seen_fn[1]
+                if isinstance(seen_key, str):
+                    return renpy.seen_translation(seen_key)
+                return bool(seen_key in (persistent._seen_ever or {}))
             elif seen_fn[0] == "say_range":
-                _k1, _k2 = seen_fn[1], seen_fn[2]
-                if isinstance(_k1, str):
+                first_key, last_key = seen_fn[1], seen_fn[2]
+                if isinstance(first_key, str):
                     ## Fast path: first node not seen → definitely unseen.
-                    if not renpy.seen_translation(_k1):
+                    if not renpy.seen_translation(first_key):
                         return False
                     ## First seen → confirm full traversal via last node.
-                    return renpy.seen_translation(_k2)
-                _ever = persistent._seen_ever or {}
-                if _k1 not in _ever:
+                    return renpy.seen_translation(last_key)
+                seen_ever = persistent._seen_ever or {}
+                if first_key not in seen_ever:
                     return False
-                return bool(_k2 in _ever)
+                return bool(last_key in seen_ever)
             elif seen_fn[0] == "image":
                 return renpy.seen_image(seen_fn[1])
             elif seen_fn[0] == "label":
                 return renpy.seen_label(seen_fn[1])
-        except Exception:
-            pass
+        except Exception as e:
+            _tl_log("TL eval_seen_fn failed: desc={} err={}".format(seen_fn, e))
         return False
 
     def _tl_option_seen(node, option_index):
@@ -197,15 +199,15 @@ init -2 python:
         ## seen target. More accurate than cached descriptors — handles script
         ## changes and correctly skips caption-only rows by visible index.
         try:
-            _peek = _tl_option_peek_seen_fn(node, option_index)
-            if _peek is not None:
-                _r = _tl_eval_seen_fn(_peek)
+            peek = _tl_option_peek_seen_fn(node, option_index)
+            if peek is not None:
+                result = _tl_eval_seen_fn(peek)
                 if TL_DEBUG_SEEN:
                     _tl_log("TL opt_seen: node={} opt={} src=peek desc={} result={}".format(
-                        node.get("index"), option_index, _peek, _r))
-                return _r
-        except Exception as _e:
-            _tl_log("TL opt_seen peek_err: node={} opt={} err={}".format(node.get("index"), option_index, _e))
+                        node.get("index"), option_index, peek, result))
+                return result
+        except Exception as e:
+            _tl_log("TL opt_seen peek_err: node={} opt={} err={}".format(node.get("index"), option_index, e))
 
         ## Direct lookup in persistent._chosen — the authoritative live dict.
         ## ChoiceReturn writes (location, label) → True when any option is chosen.
@@ -227,13 +229,14 @@ init -2 python:
             cr = crs[option_index]
             if cr is not None:
                 try:
-                    _r = bool(cr.get_chosen())
-                    if _r and TL_DEBUG_SEEN:
+                    result = bool(cr.get_chosen())
+                    if result and TL_DEBUG_SEEN:
                         _tl_log("TL opt_seen: node={} opt={} src=cr result=True".format(
                             node.get("index"), option_index))
-                    return _r
-                except Exception:
-                    pass
+                    return result
+                except Exception as e:
+                    _tl_log("TL opt_seen cr.get_chosen failed: node={} opt={} err={}".format(
+                        node.get("index"), option_index, e))
 
         if TL_DEBUG_SEEN:
             _tl_log("TL opt_seen: node={} opt={} src=none result=False".format(
@@ -248,28 +251,28 @@ init -2 python:
         without storing extra metadata on timeline nodes. Caption-only menu rows are
         skipped because they have no block.
         """
-        _key = node.get("ast_key")
-        if not isinstance(_key, (list, tuple)) or len(_key) != 2:
+        ast_key = node.get("ast_key")
+        if not isinstance(ast_key, (list, tuple)) or len(ast_key) != 2:
             return None
 
-        _menu = (_tl_live_menu_lookup() or {}).get(tuple(_key))
-        if _menu is None:
+        menu = (_tl_live_menu_lookup() or {}).get(tuple(ast_key))
+        if menu is None:
             if TL_DEBUG_SEEN:
                 _tl_log("TL peek_seen: node={} opt={} key={} menu_lookup=None".format(
-                    node.get("index"), option_index, _key))
+                    node.get("index"), option_index, ast_key))
             return None
 
-        _visible_index = 0
-        for _item in (getattr(_menu, "items", None) or []):
-            _block = _item[2] if len(_item) > 2 else None
-            if not _block:
+        visible_index = 0
+        for item in (getattr(menu, "items", None) or []):
+            block = item[2] if len(item) > 2 else None
+            if not block:
                 continue
-            if _visible_index == option_index:
-                _desc = _tl_make_seen_fn(_block)
-                if _desc and _desc[0] != "never":
-                    return _desc
+            if visible_index == option_index:
+                desc = _tl_make_seen_fn(block)
+                if desc and desc[0] != "never":
+                    return desc
                 return None
-            _visible_index += 1
+            visible_index += 1
         return None
 
     def _tl_node_has_new(node):

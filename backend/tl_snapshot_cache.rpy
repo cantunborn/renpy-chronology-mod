@@ -34,28 +34,27 @@ init -2 python:
 
     def _tl_capture_snapshot():
         """
-        Capture full game state as a snapshot dict.
-        Returns a plain dict {"roots": ..., "context": ctx}. Raises on failure.
+        Capture full game state as a snapshot dict {"roots": ..., "context": ctx}.
 
-        complete(False) flushes pending store deltas so get_roots() reflects true
-        current state. context.info is deep-copied to freeze display state at capture
-        time (rollback_copy returns a shallow context where ctx.info is a live
-        reference that mutates as the game progresses).
+        ctx.info (scene list, music) is deep-copied at capture time because rollback_copy()
+        is shallow — ctx.info is a live reference that mutates as the game continues.
+        All other ctx fields are isolated at unfreeze time via deepcopy in _tl_unfreeze_from_snapshot.
 
-        In compiled .rpyc files ctx.current is a tuple (filename, serial, linenumber)
-        that has_label() cannot resolve. Patched to the enclosing label name so
-        RollbackLog.rollback() stops correctly at our synthetic entry.
+        In compiled .rpyc files ctx.current is a (filename, serial, linenumber) tuple that
+        has_label() cannot resolve. Patched to the enclosing label so RollbackLog.rollback()
+        stops correctly at our synthetic entry.
         """
         import copy as _copy
-        renpy.game.log.complete(False)
+        renpy.game.log.complete(False)  # flush pending store deltas into the log
         ctx = renpy.game.context().rollback_copy()
         try:
             ctx.info = _copy.deepcopy(ctx.info)
-        except Exception as _ie:
-            _tl_log("TL snapshot: deepcopy info failed: {}".format(_ie))
+        except Exception as e:
+            _tl_log("TL snapshot: deepcopy info failed: {}".format(e))
         snap = _TL_PLAIN_DICT()
         snap["roots"]   = renpy.game.log.get_roots()
         snap["context"] = ctx
+        # patch ctx.current for compiled .rpyc files where the label is a tuple
         ctx_cur = getattr(ctx, "current", None)
         if ctx_cur is not None and not renpy.game.script.has_label(ctx_cur):
             if isinstance(ctx_cur, tuple) and len(ctx_cur) >= 3:
@@ -78,17 +77,17 @@ init -2 python:
 
     def _tl_cache_menu_snapshot(node_index, snap):
         """Write snap to cache["menu"][node_index]. Called after history append."""
-        _cache = _tl_get_snapshot_cache()
-        _cache["menu"][node_index] = snap
+        cache = _tl_get_snapshot_cache()
+        cache["menu"][node_index] = snap
         _tl_log("TL snapshot: cached idx={} cache_menu_total={}".format(
-            node_index, len(_cache["menu"])))
+            node_index, len(cache["menu"])))
 
     def _tl_cache_chapter_snapshot(label_name, snap):
         """Write snap to cache["chapter"][label_name]."""
-        _cache = _tl_get_snapshot_cache()
-        _cache["chapter"][label_name] = snap
+        cache = _tl_get_snapshot_cache()
+        cache["chapter"][label_name] = snap
         _tl_log("TL snapshot: chapter cached label={} cache_chapter_total={}".format(
-            label_name, len(_cache["chapter"])))
+            label_name, len(cache["chapter"])))
 
     def _tl_get_menu_snapshot(node_index):
         """Return cache["menu"].get(node_index) or None."""
@@ -100,11 +99,11 @@ init -2 python:
 
     def _tl_transfer_snapshot_cache(new_log):
         """Copy cache from current renpy.game.log to new_log."""
-        _old = getattr(renpy.game.log, "_tl_snapshot_cache", None)
-        if _old is not None:
-            new_log._tl_snapshot_cache = _old
+        old_cache = getattr(renpy.game.log, "_tl_snapshot_cache", None)
+        if old_cache is not None:
+            new_log._tl_snapshot_cache = old_cache
             _tl_log("TL unfreeze: cache copied menu={} chapter={}".format(
-                len(_old.get("menu", {})), len(_old.get("chapter", {}))))
+                len(old_cache.get("menu", {})), len(old_cache.get("chapter", {}))))
         else:
             _tl_log("TL unfreeze: no cache to copy (old_log had none)")
 
@@ -120,18 +119,20 @@ init -2 python:
             import renpy.python as rb_mod
 
         roots = snap["roots"]
+        # deepcopy ctx so Ren'Py's post-unfreeze mutations don't corrupt the stored snapshot.
+        # also reset interacting to heal saves made before this fix was applied.
         try:
             import copy as _copy
             ctx = _copy.deepcopy(snap["context"])
-        except Exception as _dce:
-            _tl_log("TL unfreeze: ctx deepcopy failed: {}".format(_dce))
+        except Exception as e:
+            _tl_log("TL unfreeze: ctx deepcopy failed: {}".format(e))
             ctx = snap["context"]
         ctx.interacting = False
 
-        ## Build synthetic RollbackLog with one entry at the target context.
-        ## Rollback() __init__ reads renpy.game.log — construct BEFORE unfreeze replaces it.
-        ## stores={} and objects=[] means no state changes on rollback; roots handles that.
-        ## not_greedy=True stops the greedy pass immediately at this entry.
+        # Build synthetic RollbackLog with one entry at the target context.
+        # Rollback() __init__ reads renpy.game.log — construct BEFORE unfreeze replaces it.
+        # stores={} and objects=[] means no state changes on rollback; roots handles that.
+        # not_greedy=True stops the greedy pass immediately at this entry.
         new_log             = rb_mod.RollbackLog()
         rb                  = rb_mod.Rollback()
         rb.context          = ctx

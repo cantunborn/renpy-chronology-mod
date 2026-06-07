@@ -11,21 +11,22 @@ init -2 python:
     def _tl_load_chapters():
         path = _tl_os_ch.path.join(renpy.config.gamedir, "renpy-chronology-mod", "chapters.json")
         try:
-            with open(path, "r") as _f:
-                raw = _tl_json_ch.load(_f)
-        except Exception:
+            with open(path, "r") as f:
+                raw = _tl_json_ch.load(f)
+        except Exception as e:
+            _tl_log("TL chapters load failed: {}".format(e))
             return {}
         seen_labels = {}
         deduped = {}
-        for _ch_name, _ch_label in raw.items():
-            if _ch_name.startswith("_"):
+        for ch_name, ch_label in raw.items():
+            if ch_name.startswith("_"):
                 continue
-            if _ch_label in seen_labels:
+            if ch_label in seen_labels:
                 _tl_log("TL WARNING chapters.json: label '{}' mapped to both '{}' and '{}'; '{}' wins".format(
-                    _ch_label, seen_labels[_ch_label], _ch_name, seen_labels[_ch_label]))
+                    ch_label, seen_labels[ch_label], ch_name, seen_labels[ch_label]))
             else:
-                seen_labels[_ch_label] = _ch_name
-                deduped[_ch_name] = _ch_label
+                seen_labels[ch_label] = ch_name
+                deduped[ch_name] = ch_label
         _tl_log("TL chapters: loaded {} from {}".format(len(deduped), path))
         return deduped
 

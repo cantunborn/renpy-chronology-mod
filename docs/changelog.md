@@ -7,6 +7,43 @@ that is present in the codebase but not yet committed.
 
 ## Unreleased
 
+### Fix: ghost cards never appeared; remove dead `_tl_branch_id`
+
+`_tl_branch_id` was declared as `default _tl_branch_id = ""` and never assigned a non-empty value. All three gate guards that checked it (`_tl_on_if_execute`, `_tl_on_screen_navigate`, `_tl_py_pre_var_snap`) therefore always returned early, permanently suppressing ghost cards and var-change notifications.
+
+- **`backend/tl_ghost_logic.rpy`** — removed `_tl_branch_id` check from `_tl_on_if_execute` and `_tl_on_screen_navigate` gates; remaining guards (`_tl_replaying`, `config.skipping`) are sufficient.
+- **`backend/tl_route_logic.rpy`** — removed `_tl_branch_id` check from `_tl_py_pre_var_snap` gate.
+- **`timeline_init.rpy`** — deleted `default _tl_branch_id = ""`.
+- **`timeline_hooks.rpy`** — removed from `global` declaration in `_tl_record_before`.
+- **`ui/tl_debug.rpy`** — removed branch_id debug row.
+- **`timeline_tests.rpy`** — removed stale `_tl_branch_id` store-default check and state-guard entries; added `_tl_test_ghost_gate_guards` and `_tl_test_ghost_on_if_execute` in-game tests.
+- **`tests/test_route_logic.py`** — removed `_tl_branch_id` setup/teardown from var-hook test fixture.
+
+### Refactor: backend quality pass — Round 2
+
+Readability cleanup across all remaining backend files — no logic changes.
+
+- **`backend/tl_ghost_logic.rpy`** — fixed banner; deleted dead `_tl_resolve_cluster_imgs` (zero callsites); fixed 3 bare `except: pass` → log; de-aliased `import ast as _ast` in two function-local scopes; renamed underscored locals throughout all functions.
+- **`backend/tl_route_logic.rpy`** — de-aliased `import ast as _pyast` in two function-local scopes; renamed underscored locals throughout all functions; kept `_cache=[None, None]` mutable default arg (intentional session-persistent idiom).
+- **`backend/tl_seen_check.rpy`** — fixed 5 bare `except` blocks → log; renamed underscored locals throughout.
+- **`backend/tl_ast_utils.rpy`** — renamed underscored locals in `_tl_extract_compare_literals` and `_tl_walk_ast_blocks`.
+- **`backend/tl_chapter.rpy`** — fixed bare `except: return {}` → log+return; renamed `_f`, `_ch_name`, `_ch_label`.
+- **`backend/tl_menu_location.rpy`** — fixed bare `except: pass` → log; collapsed `_tl_derive_node_menu_site_key` into `_tl_node_menu_site_key` (deleted redundant one-liner wrapper); renamed underscored locals; updated `timeline_tests.rpy` callsite.
+- **`backend/tl_coverage.rpy`** — renamed inner function `_tl_cov_visitor → visitor`; renamed underscored locals.
+- **`backend/tl_assets.rpy`** — fixed banner; fixed 3 bare `except` blocks → log; de-aliased `import tempfile as _tf` and `import pygame as _pg` (function-local); renamed underscored locals throughout all functions.
+
+### Refactor: 80/20 code quality pass across core files
+
+Readability and maintainability cleanup — no logic changes.
+
+- **`backend/tl_shadow_path.rpy`** — extracted `_entry_key(entry)` helper (de-duplicated backward-compat list→tuple coercion); moved match/no-match log statements into `_tl_consume_shadow_path` so all shadow diagnostics are co-located; renamed `orig_ci → orig_chosen`, `new_sp → remaining`.
+- **`backend/tl_snapshot_cache.rpy`** — renamed local vars (`_cache → cache`, `_old → old_cache`, `_ie → e`, `_copy → copy`); trimmed `_tl_capture_snapshot` docstring to essential contract + mutation risks; converted `## comments → # comments` inside functions.
+- **`backend/tl_saveload.rpy`** — renamed underscored locals throughout (`_iface → iface`, `_renpy_major → renpy_major`, `h6 → slot_hash`, `_os → os`, `_root → root`, `_ext → ext`, `_slot → slot`).
+- **`timeline_init.rpy`** — extracted `_tl_load_thumb_dict(path)` from nested gzip/raw try-except block; renamed underscored locals in `_tl_log`, `_tl_runtime_cache_store`, `_tl_runtime_choice_returns`, `_tl_count_locked_branches`, `_tl_save_thumbs`; cleaned up module-level thumbnail init block.
+- **`backend/tl_menu_options.rpy`** — extracted `_tl_parse_menu_items(items)` from `_tl_record_before`; owns all raw menu item parsing alongside existing filtering/indexing helpers.
+- **`timeline_hooks.rpy`** — extracted `_tl_resolve_node_location()`, `_tl_resolve_img_name()`, `_tl_capture_thumb()` from `_tl_record_before`; extracted `_tl_replay_pick()` from `_tl_store_wrapper`; removed dead commented-out branch ID block; fixed bare `except: pass` → log; removed duplicate shadow path log statements from wrapper (now live in `_tl_consume_shadow_path`); simplified shadow block; renamed locals throughout.
+- **`timeline_tests.rpy`** — added `_TLFakeChoice` module-level stub (replaces 4 local `FakeCR`/`FakeChoiceReturn` class definitions); added `_TLStateGuard` context manager (replaces manual save/restore boilerplate in `_tl_test_record_pipeline`, `_tl_test_locked_options`, `_tl_test_option_filtering`).
+
 ### Fix: "Cannot start an interaction" error on second jump to same menu
 
 After a snapshot-based jump, Ren'Py sets the live game context to the `rb.context` object assigned during unfreeze. As gameplay continues, `rb.context.interacting` is set to `True`. Since the old code assigned `snap["context"]` directly to `rb.context` (no copy), the snapshot's context object was the same reference as the live context — it accumulated the `interacting=True` mutation and got pickled into any save made post-jump. On the next jump from such a save, `_tl_unfreeze_from_snapshot` would read `ctx.interacting=True` and pass it into the new Rollback entry, causing Ren'Py to raise "Cannot start an interaction in the middle of an interaction" during `unfreeze()`.

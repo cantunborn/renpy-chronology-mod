@@ -39,18 +39,18 @@ init -2 python:
         if not cond_str or cond_str in ("True", "False", "None", "else"):
             return []
         try:
-            _tree = _tl_pyast_util.parse(cond_str, mode="eval")
+            tree = _tl_pyast_util.parse(cond_str, mode="eval")
         except SyntaxError:
             return []
-        _results = []
-        for _cnode in _tl_pyast_util.walk(_tree):
-            if not isinstance(_cnode, _tl_pyast_util.Compare):
+        results = []
+        for compare_node in _tl_pyast_util.walk(tree):
+            if not isinstance(compare_node, _tl_pyast_util.Compare):
                 continue
-            for _comp in _cnode.comparators:
-                _val = _tl_ast_literal_value(_comp)
-                if _val is not None:
-                    _results.append(_val)
-        return _results
+            for comparator in compare_node.comparators:
+                val = _tl_ast_literal_value(comparator)
+                if val is not None:
+                    results.append(val)
+        return results
 
     def _tl_is_game_file(f):
         """
@@ -79,37 +79,37 @@ init -2 python:
         state at the point the branch is reached.
         initial_state defaults to None for stateless visitors (return state unchanged).
         """
-        _visited = set()
-        _work = []
+        visited = set()
+        work = []
 
-        for _ln in nodes:
-            if type(_ln).__name__ != "Label":
+        for label_node in nodes:
+            if type(label_node).__name__ != "Label":
                 continue
-            if not _tl_is_game_file(getattr(_ln, "filename", "")):
+            if not _tl_is_game_file(getattr(label_node, "filename", "")):
                 continue
-            _lb = getattr(_ln, "block", None)
-            if _lb:
-                _work.append((list(_lb) if not isinstance(_lb, list) else _lb, initial_state, _ln.name))
+            label_block = getattr(label_node, "block", None)
+            if label_block:
+                work.append((list(label_block) if not isinstance(label_block, list) else label_block, initial_state, label_node.name))
 
-        while _work:
-            _block, _state, _cur_label = _work.pop()
-            for _node in (_block or []):
-                _nid = _tl_builtin_id(_node)
-                if _nid in _visited:
+        while work:
+            block, state, cur_label = work.pop()
+            for node in (block or []):
+                node_id = _tl_builtin_id(node)
+                if node_id in visited:
                     continue
-                _visited.add(_nid)
-                _state = visitor_fn(_node, _state, _cur_label)
+                visited.add(node_id)
+                state = visitor_fn(node, state, cur_label)
 
-                _nt = type(_node).__name__
-                if _nt == "If":
-                    for _, _ib in (getattr(_node, "entries", None) or []):
-                        if _ib:
-                            _work.append((_ib, _state, _cur_label))
-                elif _nt == "Menu":
-                    for _item in (getattr(_node, "items", None) or []):
-                        _ib = _item[2] if isinstance(_item, (list, tuple)) and len(_item) > 2 else None
-                        if _ib:
-                            _work.append((_ib, _state, _cur_label))
+                node_type = type(node).__name__
+                if node_type == "If":
+                    for _, item_block in (getattr(node, "entries", None) or []):
+                        if item_block:
+                            work.append((item_block, state, cur_label))
+                elif node_type == "Menu":
+                    for item in (getattr(node, "items", None) or []):
+                        item_block = item[2] if isinstance(item, (list, tuple)) and len(item) > 2 else None
+                        if item_block:
+                            work.append((item_block, state, cur_label))
 
     def _tl_prettify_var(name):
         """Convert a snake_case variable name to a readable label."""

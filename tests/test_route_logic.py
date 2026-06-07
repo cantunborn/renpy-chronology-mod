@@ -422,11 +422,9 @@ class TestPythonExecutePatched:
     Pre-hook snapshots x=0, post-hook sees x=1 → detectable via _tl_recently_changed_vars.
     """
     def setup_method(self):
-        self._branch_id_saved  = ns.get("_tl_branch_id", "")
         self._saved_rnames     = getattr(ns["persistent"], "_tl_route_var_names", [])
         self._saved_rcv        = getattr(ns["store"], "_tl_recently_changed_vars", set())
         self._saved_enabled    = getattr(ns["persistent"], "_tl_var_notifs_enabled", False)
-        ns["store"]._tl_branch_id = "test_branch_abc"
         ns["persistent"]._tl_replaying = False
         ns["renpy"].config.skipping = False
         ns["persistent"]._tl_route_var_names = ["x"]
@@ -435,7 +433,6 @@ class TestPythonExecutePatched:
         setattr(ns["store"], "x", 0)
 
     def teardown_method(self):
-        ns["store"]._tl_branch_id = self._branch_id_saved
         ns["persistent"]._tl_route_var_names = self._saved_rnames
         ns["store"]._tl_recently_changed_vars = self._saved_rcv
         ns["persistent"]._tl_replaying = False

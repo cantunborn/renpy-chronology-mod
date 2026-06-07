@@ -164,7 +164,6 @@ Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` to track branch cond
 | `_tl_prettify_condition` | `(cond) → str` | Prettifies snake_case var names and strips quotes from string values using `ast.parse`. `Name` nodes → `_tl_prettify_var` (defined in `tl_ast_utils.rpy`); `Constant` string nodes → bare value (no quotes); numeric constants left as-is. Applies replacements right-to-left by `col_offset`. Falls back to regex on parse failure. Example: `route_id == "romance"` → `Route Id == romance`. |
 | `_tl_get_taken_branch` | `(if_node) → int` | Evaluates conditions in order and returns the index of the first True one. |
 | `_tl_build_ghost_payload` | `(if_node, taken_index, context_img=None) → dict or None` | Builds one ghost payload dict for a single If node with conditions, seen_fns, branch_imgs. Returns None when all entries collapse to a single `"True"` condition (no branching content). |
-| `_tl_resolve_cluster_imgs` | `(if_node, context_img) → list` | Resolves per-branch thumbnail images for one If node using cross-branch comparison. |
 | `_tl_collect_if_run` | `(start_if_node) → list` | Collects a sequential run of player-relevant sibling If nodes with payload building. |
 | `_tl_partition_if_run` | `(run) → list` | Partitions a sequential If run into mutually-exclusive cluster groups. |
 | `_tl_emit_ghost_cluster` | `(group, cluster_with_prev) → None` | Emits one ghost cluster: writes AST-derived fields to `persistent._tl_ghost_node_cache` (with invalidation check), then appends a slim dict with only the 4 runtime fields to `store._tl_ghost_nodes`. |
@@ -292,8 +291,7 @@ Stable menu site identity keys used to match history nodes across save/load.
 | `_tl_menu_site_key` | `(file_path, line_no) → str` | Builds a normalized `"{file}:{line}"` menu site identity key. |
 | `_tl_location_menu_ast_key` | `(location) → tuple or None` | Resolves a runtime `_location` tuple to the real Menu `(file, line)` key by walking the live AST namemap. |
 | `_tl_location_menu_site_key` | `(location) → str or None` | Returns the normalized menu-site key from a runtime `_location` tuple. |
-| `_tl_derive_node_menu_site_key` | `(node) → str or None` | Best-effort stable menu-site identity for a history node; uses `ast_key` first, `_location` as fallback. |
-| `_tl_node_menu_site_key` | `(node) → str or None` | Returns the preferred stable menu-site key for a history node. |
+| `_tl_node_menu_site_key` | `(node) → str or None` | Best-effort stable menu-site identity for a history node; uses `ast_key` first, `_location` as fallback. |
 | `_tl_live_menu_lookup` | `() → dict` | Returns a lazy `(file, line) → live Menu node` map from RenPy namemap; result cached in runtime store. |
 
 ---
@@ -337,7 +335,6 @@ Menu interception, save callbacks, replay wrapper, and ghost card hook. Runs at 
 
 **Store variables (saved with game):**
 - `_tl_history` — list of node dicts; one per menu encounter
-- `_tl_branch_id` — unique hex ID for current playthrough branch
 - `_tl_node_count` — count of menu nodes encountered
 - `_tl_context` — list of `(prompt, chosen_index)` tuples
 
@@ -378,7 +375,6 @@ Store/persistent initialization, constants, logging, AST map build, and utility 
 
 **Store variables (saved with game):**
 - `_tl_history` (default `[]`)
-- `_tl_branch_id` (default `""`)
 - `_tl_context` (default `[]`)
 - `_tl_node_count` (default `0`)
 
@@ -411,7 +407,6 @@ Store/persistent initialization, constants, logging, AST map build, and utility 
 | `_tl_log` | `(msg) → None` | Appends msg with timestamp to `debug.txt` in the mod directory. |
 | `_tl_runtime_cache_store` | `() → dict` | Returns the transient runtime cache dict hung on `renpy.game.script`; avoids polluting saveable store. |
 | `_tl_runtime_choice_returns` | `(node, create=False) → list or None` | Returns transient `ChoiceReturn` slots for a node keyed by `id(node)`; creates list if `create=True`. |
-| `_tl_new_branch_id` | `() → str` | Returns a 12-character UUID hex string for a new branch. |
 | `_tl_count_locked_branches` | `() → int` | Counts globally locked branches by evaluating every descriptor in `persistent._tl_all_branch_descs` via `_tl_eval_seen_fn`. Called once per `timeline` screen open via screen `default _tl_locked_count`. |
 | `_tl_build_ast_map` | `() → None` | Entry point for the background AST walk; sets `_tl_ast_ready = True`, then calls `_tl_build_route_index`, `_tl_build_coverage_index`, and `_tl_build_menu_scene_index`. |
 | `_tl_migrate_img_names` | `() → None` | Stamps `img_name` onto history nodes missing it using `persistent._tl_menu_scene_map`; runs once per load. |
@@ -590,7 +585,7 @@ Debug overlay showing game/mod state.
 | Screen | Parameters | Description |
 |--------|-----------|-------------|
 | `_tl_debug_overlay()` | none | Conditional wrapper; shows `tl_debug` if `_tl_debug_visible`. |
-| `tl_debug()` | none | Draggable panel: RenPy version, branch_id, node/history counts, AST status, last node details (prompt, chosen, options, thumb size, ast_key), CFG dump button. |
+| `tl_debug()` | none | Draggable panel: RenPy version, node/history counts, AST status, last node details (prompt, chosen, options, thumb size, ast_key), CFG dump button. |
 | `tl_dbrow(label, value)` | `(str, str)` | Two-column label/value row for the debug panel. |
 
 ---

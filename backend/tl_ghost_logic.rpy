@@ -1,5 +1,5 @@
 ## =============================================================================
-## CHRONOLOGY MOD — timeline_ghost_logic.rpy
+## CHRONOLOGY MOD — tl_ghost_logic.rpy
 ## Ghost card runtime logic: If-node hook, payload building, clustering.
 ## =============================================================================
 
@@ -32,37 +32,37 @@ init -2 python:
         ## Tier 2: follow first Jump or Call one hop
         if len(collected) < max_images:
             try:
-                _nm = renpy.game.script.namemap
+                namemap = renpy.game.script.namemap
                 for node in block:
                     if type(node).__name__ in ("Jump", "Call"):
-                        _target = getattr(node, "target", None)
-                        if not _target:
+                        target = getattr(node, "target", None)
+                        if not target:
                             continue
-                        _ln = _nm.get(_target)
-                        _sub = getattr(_ln, "block", None)
-                        if _sub:
-                            visited.add(_target)
+                        label_node = namemap.get(target)
+                        sub_block = getattr(label_node, "block", None)
+                        if sub_block:
+                            visited.add(target)
                             ## Walk .next chain — covers all sequential scenes in
                             ## the label, not just the flat block list.
                             ## Stop at Label nodes to avoid crossing into the next label.
-                            _snode = _sub[0]
-                            _walked = 0
-                            while _snode is not None and len(collected) < max_images:
-                                _stype = type(_snode).__name__
-                                if _stype == "Label":
+                            snode = sub_block[0]
+                            walked = 0
+                            while snode is not None and len(collected) < max_images:
+                                stype = type(snode).__name__
+                                if stype == "Label":
                                     break
-                                if _stype in ("Scene", "Show"):
-                                    sp = getattr(_snode, "imspec", None)
+                                if stype in ("Scene", "Show"):
+                                    sp = getattr(snode, "imspec", None)
                                     if sp and sp[0] and tuple(sp[0]) in renpy.display.image.images:
-                                        collected.append((" ".join(sp[0]), _target))
-                                _snode = getattr(_snode, "next", None)
-                                _walked += 1
+                                        collected.append((" ".join(sp[0]), target))
+                                snode = getattr(snode, "next", None)
+                                walked += 1
                             if TL_DEBUG_GHOST:
                                 _tl_log("TL collect_branch_imgs hop {}: walked={} imgs={}".format(
-                                    _target, _walked, [i for i, _ in collected]))
+                                    target, walked, [i for i, _ in collected]))
                         break  ## one hop only
-            except Exception as _e:
-                _tl_log("TL collect_branch_imgs hop failed: {}".format(_e))
+            except Exception as e:
+                _tl_log("TL collect_branch_imgs hop failed: {}".format(e))
 
         return collected, visited
 
@@ -82,13 +82,13 @@ init python:
         """Return persistent AST-derived data for a ghost cluster by its ast_key."""
         return (persistent._tl_ghost_node_cache or {}).get(str(ast_key)) or {}
 
-    def _tl_make_seen_fn_cached(_blk):
-        if _blk is None:
+    def _tl_make_seen_fn_cached(blk):
+        if blk is None:
             return ("never",)
-        _key = _tl_builtin_id(_blk)
-        if _key not in _TL_SEEN_FN_CACHE:
-            _TL_SEEN_FN_CACHE[_key] = _tl_make_seen_fn(_blk)
-        return _TL_SEEN_FN_CACHE[_key]
+        cache_key = _tl_builtin_id(blk)
+        if cache_key not in _TL_SEEN_FN_CACHE:
+            _TL_SEEN_FN_CACHE[cache_key] = _tl_make_seen_fn(blk)
+        return _TL_SEEN_FN_CACHE[cache_key]
 
     ## ── Var / condition helpers (restored from deleted tl_var_delta.rpy) ─────
 
@@ -106,17 +106,17 @@ init python:
 
     def _tl_extract_vars_from_conditions(conditions):
         """Return the set of game-variable names referenced across all condition strings."""
-        import ast as _ast
+        import ast
         out = set()
         for cond in conditions:
             if cond in ("True", "False", "None"):
                 continue
             try:
-                tree = _ast.parse(cond, mode="eval")
+                tree = ast.parse(cond, mode="eval")
             except SyntaxError:
                 continue
-            for node in _ast.walk(tree):
-                if isinstance(node, _ast.Name):
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Name):
                     name = node.id
                     if name not in _TL_KW_SKIP and not name[0].isupper():
                         out.add(name)
@@ -144,20 +144,20 @@ init python:
                 if isinstance(n.op, _tl_ast_mod.Or):
                     result = []
                     for v in n.values:
-                        r = _node_to_regions(v)
-                        if r is None:
+                        cond_regions = _node_to_regions(v)
+                        if cond_regions is None:
                             return None
-                        result.extend(r)
+                        result.extend(cond_regions)
                     return result
                 elif isinstance(n.op, _tl_ast_mod.And):
                     result = [{}]
                     for v in n.values:
-                        r = _node_to_regions(v)
-                        if r is None:
+                        cond_regions = _node_to_regions(v)
+                        if cond_regions is None:
                             return None
                         new_result = []
                         for existing in result:
-                            for clause in r:
+                            for clause in cond_regions:
                                 merged = dict(existing)
                                 ok = True
                                 for var, vals in clause.items():
@@ -178,9 +178,9 @@ init python:
                         isinstance(n.left, _tl_ast_mod.Name)):
                     var = n.left.id
                     comp = n.comparators[0]
-                    _lit = _tl_ast_literal_value(comp)
-                    if _lit is not None:
-                        return [{var: frozenset([_lit])}]
+                    lit = _tl_ast_literal_value(comp)
+                    if lit is not None:
+                        return [{var: frozenset([lit])}]
             return None
 
         return _node_to_regions(tree.body)
@@ -259,22 +259,22 @@ init python:
         if cond == "True":
             return "else"
         try:
-            import ast as _ast
-            _tree = _ast.parse(cond, mode="eval")
-            _repls = []
-            for _node in _ast.walk(_tree):
-                if isinstance(_node, _ast.Name):
-                    _n = _node.id
-                    if _n not in _TL_KW_SKIP and not _n[0].isupper():
-                        _col = _node.col_offset
-                        _repls.append((_col, _col + len(_n), _tl_prettify_var(_n)))
-                elif isinstance(_node, _ast.Constant) and isinstance(_node.value, str):
-                    _repls.append((_node.col_offset, _node.end_col_offset, str(_node.value)))
-            _repls.sort(key=lambda x: x[0], reverse=True)
-            _result = cond
-            for _s, _e, _pretty in _repls:
-                _result = _result[:_s] + _pretty + _result[_e:]
-            return _tl_strip_renpy_tags(_result)
+            import ast
+            tree = ast.parse(cond, mode="eval")
+            repls = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Name):
+                    name = node.id
+                    if name not in _TL_KW_SKIP and not name[0].isupper():
+                        col = node.col_offset
+                        repls.append((col, col + len(name), _tl_prettify_var(name)))
+                elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    repls.append((node.col_offset, node.end_col_offset, str(node.value)))
+            repls.sort(key=lambda x: x[0], reverse=True)
+            result = cond
+            for start, end, pretty in repls:
+                result = result[:start] + pretty + result[end:]
+            return _tl_strip_renpy_tags(result)
         except Exception:
             def _repl(m):
                 name = m.group(1)
@@ -293,12 +293,12 @@ init python:
     def _tl_get_taken_branch(if_node):
         """Evaluate conditions in order and return index of first True one."""
         try:
-            for _i, (_cond, _blk) in enumerate(if_node.entries):
-                _cond_s = str(_cond)
-                if _cond_s == "True":
-                    return _i
-                if renpy.python.py_eval(_cond_s):
-                    return _i
+            for i, (cond, blk) in enumerate(if_node.entries):
+                cond_str = str(cond)
+                if cond_str == "True":
+                    return i
+                if renpy.python.py_eval(cond_str):
+                    return i
         except Exception:
             pass
         return None
@@ -324,12 +324,12 @@ init python:
         branch_imgs = []
 
         regions = []
-        for _cond in conditions:
-            if _cond in ("True", "else", ""):
+        for cond in conditions:
+            if cond in ("True", "else", ""):
                 continue
-            _r = _tl_parse_regions(_cond)
-            if _r is not None:
-                regions.extend(_r)
+            cond_regions = _tl_parse_regions(cond)
+            if cond_regions is not None:
+                regions.extend(cond_regions)
             else:
                 regions = None
                 break
@@ -338,8 +338,8 @@ init python:
                 len(regions) if regions is not None else "None"))
 
         seen_fns = []
-        for _cond, _blk in entries:
-            seen_fns.append(_tl_make_seen_fn_cached(_blk))
+        for cond, blk in entries:
+            seen_fns.append(_tl_make_seen_fn_cached(blk))
 
         return {
             "ast_key":        (if_node.filename, if_node.linenumber),
@@ -351,96 +351,54 @@ init python:
             "_regions":       regions,
         }
 
-    def _tl_resolve_cluster_imgs(if_node, context_img):
-        """
-        Resolve per-branch thumbnail images for one If node using cross-branch
-        comparison. Prefers the first image that distinguishes a branch from its
-        siblings. Falls back to first image in sequence, or context_img for
-        dialogue-only (empty) branches.
-        """
-        entries = getattr(if_node, "entries", [])
-        ## Collect (images, visited_labels) per branch
-        per_branch = []
-        for _cond, _blk in entries:
-            _imgs, _vis = _collect_branch_imgs(_blk) if _blk else ([], set())
-            per_branch.append((_imgs, _vis))
-
-        ## Convergence truncation: images from labels visited by ALL branches
-        ## are post-convergence — drop them so we only diff the unique portion.
-        _all_vis = [_vis for _, _vis in per_branch if _vis]
-        if len(_all_vis) >= 2:
-            _shared = set.intersection(*[set(_v) for _v in _all_vis])
-            per_branch = [
-                ([_item for _item in _imgs if _item[1] not in _shared], _vis)
-                for _imgs, _vis in per_branch
-            ]
-
-        ## Build per-branch image sets for sibling comparison
-        _all_img_sets = [set(_img for _img, _ in _imgs) for _imgs, _ in per_branch]
-
-        result = []
-        for _bi, (_imgs, _) in enumerate(per_branch):
-            if not _imgs:
-                result.append(context_img)
-                continue
-            _sibling_imgs = set().union(*(
-                _all_img_sets[_j] for _j in range(len(per_branch)) if _j != _bi
-            ))
-            ## First image unique to this branch; fall back to first image if all shared
-            _chosen = next((_img for _img, _ in _imgs if _img not in _sibling_imgs), None)
-            result.append(_chosen or _imgs[0][0])
-        if TL_DEBUG_GHOST:
-            _tl_log("TL ghost cluster_imgs: {}".format(result))
-        return result
-
     def _tl_collect_if_run(start_if_node):
         """Collect a sequential run of player-relevant sibling If nodes."""
-        _context_img = _tl_resolve_live_menu_img_name()
+        context_img = _tl_resolve_live_menu_img_name()
         run = []
-        _node = start_if_node
-        while _node is not None and isinstance(_node, _tl_renpy_ast.If):
-            _payload = _tl_build_ghost_payload(_node, _tl_get_taken_branch(_node), _context_img)
-            if _payload is None:
+        node = start_if_node
+        while node is not None and isinstance(node, _tl_renpy_ast.If):
+            payload = _tl_build_ghost_payload(node, _tl_get_taken_branch(node), context_img)
+            if payload is None:
                 break
-            run.append((_payload, _node))
-            _node = getattr(_node, "next", None)
+            run.append((payload, node))
+            node = getattr(node, "next", None)
         ## Collect raw image sequences per branch; selection deferred to
         ## _tl_emit_ghost_cluster so cross-payload differentiation is possible.
-        for _payload, _if_node in run:
-            _entries = getattr(_if_node, "entries", [])
-            _seqs = []
-            for _cond, _blk in _entries:
-                _imgs, _vis = _collect_branch_imgs(_blk) if _blk else ([], set())
-                _seqs.append((_imgs, _vis))
-            _payload["branch_img_seqs"] = _seqs
-            _payload["context_img"] = _context_img
-            _payload["all_branches_exit"] = all(
-                _tl_branch_exits_before_next(_blk)
-                for _, _blk in _entries if _blk
+        for payload, if_node in run:
+            entries = getattr(if_node, "entries", [])
+            seqs = []
+            for cond, blk in entries:
+                imgs, vis = _collect_branch_imgs(blk) if blk else ([], set())
+                seqs.append((imgs, vis))
+            payload["branch_img_seqs"] = seqs
+            payload["context_img"] = context_img
+            payload["all_branches_exit"] = all(
+                _tl_branch_exits_before_next(blk)
+                for _, blk in entries if blk
             )
-        return [_p for _p, _ in run]
+        return [p for p, _ in run]
 
     def _tl_partition_if_run(run):
         """Partition a sequential If run into mutually-exclusive cluster components."""
         if not run:
             return []
-        _groups = []
-        _current = [run[0]]
-        for _payload in run[1:]:
-            _prev = {"_regions": []}
-            for _m in _current:
-                _prev["_regions"].extend(_m.get("_regions") or [])
-            _jump_cluster = (
-                _payload.get("all_branches_exit") and
-                all(_p.get("all_branches_exit") for _p in _current)
+        groups = []
+        current = [run[0]]
+        for payload in run[1:]:
+            prev = {"_regions": []}
+            for m in current:
+                prev["_regions"].extend(m.get("_regions") or [])
+            jump_cluster = (
+                payload.get("all_branches_exit") and
+                all(p.get("all_branches_exit") for p in current)
             )
-            if _tl_should_cluster(_prev, _payload.get("conditions") or []) or _jump_cluster:
-                _current.append(_payload)
+            if _tl_should_cluster(prev, payload.get("conditions") or []) or jump_cluster:
+                current.append(payload)
             else:
-                _groups.append(_current)
-                _current = [_payload]
-        _groups.append(_current)
-        return _groups
+                groups.append(current)
+                current = [payload]
+        groups.append(current)
+        return groups
 
     def _tl_emit_ghost_cluster(group, cluster_with_prev):
         """Emit one ghost-card object from a clustered group of If payloads."""
@@ -454,49 +412,49 @@ init python:
         member_ast_keys = []
         taken_index = None
         row_offset = 0
-        _all_seqs = []
-        _context_img = None
+        all_seqs = []
+        context_img = None
 
-        for _payload in group:
-            member_ast_keys.append(_payload["ast_key"])
-            conditions.extend(_payload.get("conditions") or [])
-            seen_fns.extend(_payload.get("seen_fns") or [])
-            _all_seqs.extend(_payload.get("branch_img_seqs") or [])
-            _context_img = _payload.get("context_img") or _context_img
-            affecting_vars |= set(_payload.get("affecting_vars") or [])
-            regions.extend(_payload.get("_regions") or [])
-            _ti = _payload.get("taken_index")
-            if _ti is not None and taken_index is None:
-                taken_index = row_offset + _ti
-            row_offset += len(_payload.get("conditions") or [])
+        for payload in group:
+            member_ast_keys.append(payload["ast_key"])
+            conditions.extend(payload.get("conditions") or [])
+            seen_fns.extend(payload.get("seen_fns") or [])
+            all_seqs.extend(payload.get("branch_img_seqs") or [])
+            context_img = payload.get("context_img") or context_img
+            affecting_vars |= set(payload.get("affecting_vars") or [])
+            regions.extend(payload.get("_regions") or [])
+            taken_idx = payload.get("taken_index")
+            if taken_idx is not None and taken_index is None:
+                taken_index = row_offset + taken_idx
+            row_offset += len(payload.get("conditions") or [])
 
         ## Differentiating-image selection across all branches in the merged cluster.
         ## Convergence truncation: drop images from labels visited by every branch.
-        _all_vis = [_vis for _, _vis in _all_seqs if _vis]
-        _shared_labels = (
-            set.intersection(*[set(_v) for _v in _all_vis])
-            if len(_all_vis) >= 2 else set()
+        all_vis = [vis for _, vis in all_seqs if vis]
+        shared_labels = (
+            set.intersection(*[set(v) for v in all_vis])
+            if len(all_vis) >= 2 else set()
         )
-        _trunc = [
-            [_item for _item in _imgs if _item[1] not in _shared_labels]
-            for _imgs, _ in _all_seqs
+        trunc = [
+            [item for item in imgs if item[1] not in shared_labels]
+            for imgs, _ in all_seqs
         ]
-        _img_sets = [set(_img for _img, _ in _imgs) for _imgs in _trunc]
-        for _bi, _imgs in enumerate(_trunc):
-            if not _imgs:
-                branch_imgs.append(_context_img)
+        img_sets = [set(img for img, _ in imgs) for imgs in trunc]
+        for branch_idx, imgs in enumerate(trunc):
+            if not imgs:
+                branch_imgs.append(context_img)
             else:
-                _siblings = set().union(*(_img_sets[_j] for _j in range(len(_trunc)) if _j != _bi))
-                _cands = [(_img, _lbl) for _img, _lbl in _imgs if not _tl_img_name_is_movie(_img)]
-                _chosen = next((_img for _img, _ in _cands if _img not in _siblings), None)
-                branch_imgs.append(_chosen or (_cands[0][0] if _cands else _context_img))
+                sibling_imgs = set().union(*(img_sets[j] for j in range(len(trunc)) if j != branch_idx))
+                cands = [(img, lbl) for img, lbl in imgs if not _tl_img_name_is_movie(img)]
+                chosen = next((img for img, _ in cands if img not in sibling_imgs), None)
+                branch_imgs.append(chosen or (cands[0][0] if cands else context_img))
         if TL_DEBUG_GHOST:
             _tl_log("TL ghost cluster_imgs: {}".format(branch_imgs))
 
-        _cache_key = str(group[0]["ast_key"])
-        _existing  = (persistent._tl_ghost_node_cache or {}).get(_cache_key)
-        if _existing is None or _existing.get("conditions") != conditions:
-            persistent._tl_ghost_node_cache[_cache_key] = {
+        cache_key = str(group[0]["ast_key"])
+        existing  = (persistent._tl_ghost_node_cache or {}).get(cache_key)
+        if existing is None or existing.get("conditions") != conditions:
+            persistent._tl_ghost_node_cache[cache_key] = {
                 "conditions":     conditions,
                 "seen_fns":       seen_fns,
                 "affecting_vars": sorted(affecting_vars),
@@ -519,25 +477,23 @@ init python:
 
         ## Track which If nodes have been executed for per-session consumed detection.
         try:
-            _if_ast_key   = (if_node.filename, if_node.linenumber)
-            _key_to_vars  = getattr(persistent, "_tl_if_key_to_vars", None) or {}
-            _vars_for_key = _key_to_vars.get(_if_ast_key) or []
-            if _vars_for_key:
-                _seen = getattr(store, "_tl_var_if_seen_keys", None)
-                if not isinstance(_seen, dict):
-                    _seen = {}
-                    store._tl_var_if_seen_keys = _seen
-                for _v in _vars_for_key:
-                    if _v not in _seen:
-                        _seen[_v] = set()
-                    _seen[_v].add(_if_ast_key)
-        except Exception:
-            pass
+            if_ast_key   = (if_node.filename, if_node.linenumber)
+            key_to_vars  = getattr(persistent, "_tl_if_key_to_vars", None) or {}
+            vars_for_key = key_to_vars.get(if_ast_key) or []
+            if vars_for_key:
+                seen = getattr(store, "_tl_var_if_seen_keys", None)
+                if not isinstance(seen, dict):
+                    seen = {}
+                    store._tl_var_if_seen_keys = seen
+                for var in vars_for_key:
+                    if var not in seen:
+                        seen[var] = set()
+                    seen[var].add(if_ast_key)
+        except Exception as e:
+            _tl_log("TL if_execute var tracking failed: {}".format(e))
 
         ## Ghost tracking (branch UI): only during active gameplay.
-        if not (getattr(store, "_tl_branch_id", "") and
-                not getattr(persistent, "_tl_replaying", False) and
-                not config.skipping):
+        if getattr(persistent, "_tl_replaying", False) or config.skipping:
             return
 
         try:
@@ -551,58 +507,58 @@ init python:
                         (if_node.filename, if_node.linenumber)))
                 return
 
-            _run = _tl_collect_if_run(if_node)
-            if not _run:
+            run = _tl_collect_if_run(if_node)
+            if not run:
                 return
-            _groups = _tl_partition_if_run(_run)
-            _prev_ghost = store._tl_ghost_nodes[-1] if store._tl_ghost_nodes else None
-            for _gi, _group in enumerate(_groups):
-                _cluster = False
-                if _gi == 0 and _prev_ghost:
-                    _cluster = _tl_should_cluster(_prev_ghost, _group[0].get("conditions") or [])
-                _tl_emit_ghost_cluster(_group, _cluster)
-            for _payload in _run[1:]:
-                store._tl_skip_ghost_ifs.add(_payload["ast_key"])
+            groups = _tl_partition_if_run(run)
+            prev_ghost = store._tl_ghost_nodes[-1] if store._tl_ghost_nodes else None
+            for group_idx, group in enumerate(groups):
+                cluster = False
+                if group_idx == 0 and prev_ghost:
+                    cluster = _tl_should_cluster(prev_ghost, group[0].get("conditions") or [])
+                _tl_emit_ghost_cluster(group, cluster)
+            for payload in run[1:]:
+                store._tl_skip_ghost_ifs.add(payload["ast_key"])
             _tl_flush_var_changes()
-            _tl_notify_branch(_run, taken_index, pre_taken_seen)
-        except Exception as _e:
-            _tl_log("TL ghost If error: {}".format(_e))
+            _tl_notify_branch(run, taken_index, pre_taken_seen)
+        except Exception as e:
+            _tl_log("TL ghost If error: {}".format(e))
 
 
     def _tl_if_execute_patched(self):
         ## Evaluate which branch will be taken BEFORE executing so condition
         ## state is captured cleanly (branch body may modify the same vars).
-        _taken = _tl_get_taken_branch(self)
+        taken = _tl_get_taken_branch(self)
         if _tl_is_game_file(getattr(self, "filename", None) or "") and TL_DEBUG_GHOST:
             try:
-                _conds = [str(e[0]) for e in (getattr(self, "entries", None) or [])]
+                conds = [str(e[0]) for e in (getattr(self, "entries", None) or [])]
                 _tl_log("TL if execute: file={} line={} taken={} conds={}".format(
                     getattr(self, "filename", None),
                     getattr(self, "linenumber", None),
-                    _taken,
-                    _conds,
+                    taken,
+                    conds,
                 ))
-            except Exception as _ife_log_e:
-                _tl_log("TL if execute log failed: {}".format(_ife_log_e))
+            except Exception as e:
+                _tl_log("TL if execute log failed: {}".format(e))
 
         ## Snapshot the taken branch's seen state BEFORE execute. Scene.execute
         ## runs synchronously inside If.execute and updates _seen_images, so
         ## any post-execute eval of image descriptors would be a false positive.
-        _pre_taken_seen = None
+        pre_taken_seen = None
         try:
-            _entries = getattr(self, "entries", None) or []
-            if _taken is not None and _taken < len(_entries):
-                _blk = _entries[_taken][1]
-                _sfn = _tl_make_seen_fn_cached(_blk)
-                if _sfn[0] != "never":
-                    _pre_taken_seen = _tl_eval_seen_fn(_sfn)
-        except Exception:
-            pass
+            entries = getattr(self, "entries", None) or []
+            if taken is not None and taken < len(entries):
+                blk = entries[taken][1]
+                seen_fn = _tl_make_seen_fn_cached(blk)
+                if seen_fn[0] != "never":
+                    pre_taken_seen = _tl_eval_seen_fn(seen_fn)
+        except Exception as e:
+            _tl_log("TL if execute pre_taken_seen failed: {}".format(e))
 
         result = _tl_orig_if_execute(self)
         ## Visited-node marking: always run (no skip/replay guard — we want to
         ## mark nodes visited even during fast-forward or before first menu choice).
-        _tl_on_if_execute(self, _taken, _pre_taken_seen)
+        _tl_on_if_execute(self, taken, pre_taken_seen)
         return result
 
     _tl_renpy_ast.If.execute = _tl_if_execute_patched
@@ -625,18 +581,18 @@ init python:
         None means indeterminate (descriptor was "never") — suppress New path.
         """
         try:
-            _all_fns      = []
-            _taken_glob_i = None   ## flat index of taken branch in _all_fns; None if not taken
-            _offset       = 0
-            for _payload in (run or []):
-                _sfns = _payload.get("seen_fns") or []
-                _ti   = _payload.get("taken_index")
-                _all_fns.extend(_sfns)
-                if _ti is not None and _ti < len(_sfns) and _taken_glob_i is None:
-                    _taken_glob_i = _offset + _ti
-                _offset += len(_sfns)
+            all_seen_fns    = []
+            taken_global_idx = None   ## flat index of taken branch; None if not taken
+            offset           = 0
+            for payload in (run or []):
+                seen_fns = payload.get("seen_fns") or []
+                taken_idx = payload.get("taken_index")
+                all_seen_fns.extend(seen_fns)
+                if taken_idx is not None and taken_idx < len(seen_fns) and taken_global_idx is None:
+                    taken_global_idx = offset + taken_idx
+                offset += len(seen_fns)
 
-            if not _all_fns:
+            if not all_seen_fns:
                 return
 
             ## Use the pre-execution snapshot for "New path" so image-based
@@ -648,21 +604,21 @@ init python:
                 return
 
             ## ⎇ icon-only: at least one non-taken branch in the cluster is locked.
-            ## When _taken_glob_i is None (no branch taken, e.g. unsatisfied standalone
+            ## When taken_global_idx is None (no branch taken, e.g. unsatisfied standalone
             ## if), all branches are candidates — still notify if any are locked.
-            _locked = sum(
-                1 for _i, _sfn in enumerate(_all_fns)
-                if _i != _taken_glob_i and not _tl_eval_seen_fn(_sfn)
+            locked = sum(
+                1 for i, seen_fn in enumerate(all_seen_fns)
+                if i != taken_global_idx and not _tl_eval_seen_fn(seen_fn)
             )
-            if _locked > 0:
+            if locked > 0:
                 if TL_DEBUG_GHOST:
-                    _tl_log("TL notify: tier=icon locked={}".format(_locked))
+                    _tl_log("TL notify: tier=icon locked={}".format(locked))
                 renpy.show_screen("_tl_notify", message="⎇")
             elif TL_DEBUG_GHOST:
                 _tl_log("TL notify: tier=suppress")
             ## all branches seen — suppress
-        except Exception:
-            pass
+        except Exception as e:
+            _tl_log("TL notify_branch failed: {}".format(e))
 
     ## ── screen-navigate callback — sandbox location-navigation ghost node clear ─
     ##
@@ -677,9 +633,7 @@ init python:
     def _tl_on_screen_navigate(name):
         if name not in ("call screen", "show screen"):
             return
-        if not (getattr(store, "_tl_branch_id", "") and
-                not getattr(persistent, "_tl_replaying", False) and
-                not config.skipping):
+        if getattr(persistent, "_tl_replaying", False) or config.skipping:
             return
         if store._tl_ghost_nodes or store._tl_skip_ghost_ifs:
             if TL_DEBUG_GHOST:
