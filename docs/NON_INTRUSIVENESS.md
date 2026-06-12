@@ -30,26 +30,24 @@ _tl_renpy_ast.If.execute = _tl_if_execute_patched
 **File:** `backend/tl_route_logic.rpy`
 
 ```python
-_tl_orig_python_execute = _tl_renpy_ast.Python.execute
+_tl_orig_python_execute = _tl_route_renpy_ast.Python.execute
 
 def _tl_python_execute_patched(self):
-    if not (guard conditions):
-        _tl_orig_python_execute(self)
-        return
-    _snap = _tl_snapshot_route_vars()
+    if renpy.is_init_phase() or not _tl_is_game_file(getattr(self, "filename", None) or ""):
+        return _tl_orig_python_execute(self)
+    snap = _tl_py_pre_var_snap(self)
     _tl_orig_python_execute(self)   # always called
-    _tl_diff_route_vars(_snap)
-    _tl_flush_var_changes()
+    _tl_py_post_var_diff(snap)
 
-_tl_renpy_ast.Python.execute = _tl_python_execute_patched
+_tl_route_renpy_ast.Python.execute = _tl_python_execute_patched
 ```
 
 - Saves original before replacing.
 - Guard conditions (any true → no mod work, just call original):
-  - `filename` does not start with `"game/"` — skips Ren'Py internals
-  - `"renpy-chronology-mod"` in filename — skips mod's own Python nodes
-  - `persistent._tl_replaying` is True — skips replay mode
-  - `config.skipping` is True — skips fast-forward mode
+  - `renpy.is_init_phase()` — skips all init-phase execution
+  - `_tl_is_game_file(filename)` false — skips Ren'Py internals and mod files
+- `_tl_py_pre_var_snap`: intersects `co_names` with route var frozenset; snapshots only vars this block might touch (~0–5). Returns `None` if intersection empty, hide-mode block, or route vars not yet built.
+- `_tl_py_post_var_diff`: diffs snapshotted vars; updates `_tl_recently_changed_vars` always; emits pending delta only when `_tl_var_notifs_enabled`.
 - Calls original unconditionally in both paths.
 - No modification to the return value (Python.execute returns None).
 

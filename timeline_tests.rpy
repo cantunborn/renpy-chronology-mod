@@ -260,6 +260,7 @@ init python:
                 r.check(s, "chosen_index is None",        node.get("chosen_index") is None)
                 r.check(s, "history has 1 entry",         len(_tl_history) == 1)
                 r.check(s, "node_count incremented",      _tl_node_count == 1)
+                r.check(s, "menu_var_snap is a dict",     isinstance(store._tl_menu_var_snap, dict))
 
                 _tl_record_after(node, "Choice A")
 

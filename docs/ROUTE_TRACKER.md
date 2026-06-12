@@ -57,21 +57,22 @@ A var is *consumed* (`_tl_var_consumed(name)`) when `len(_tl_var_if_seen_keys[na
 
 ### 3. Var change detection
 
-`_tl_python_execute_patched` (in `backend/tl_ghost_logic.rpy`) wraps `renpy.ast.Python.execute`:
+`_tl_python_execute_patched` (in `backend/tl_route_logic.rpy`) wraps `renpy.ast.Python.execute`:
 
-1. **Filename filter**: only intercepts game scripts (`filename.startswith("game/")` and `"renpy-chronology-mod" not in filename`). Mod files and Ren'Py internals bypass the patch.
-2. **Guards**: no-ops if `persistent._tl_replaying` or `config.skipping`.
-3. **Pattern**: snapshot → execute original → diff.
+1. **Init guard**: bails immediately during `renpy.is_init_phase()`.
+2. **Filename filter**: `_tl_is_game_file(filename)` — skips Ren'Py internals and mod files.
+3. **Guards**: no-ops if `persistent._tl_replaying` or `config.skipping`.
+4. **Pattern**: pre-snap → execute original → post-diff.
 
-`_tl_snapshot_route_vars()` returns `{var: getattr(store, var, None)}` for all `_tl_route_var_names`.
+`_tl_py_pre_var_snap(node)` intersects `node.code.bytecode.co_names` with a frozenset of route var names (cached by identity of `persistent._tl_route_var_names`). Returns a `{var: old_val}` dict for the ~0–5 matched vars, or `None` if the intersection is empty, the block is hide-mode, or route vars are not yet built.
 
-`_tl_diff_route_vars(snap)` compares store values against the snapshot and writes changes into `store._tl_pending_var_changes = {var: (old_val, new_val)}`. Key rules:
+`_tl_py_post_var_diff(snap)` diffs current store values against the snapshot. Key rules:
 - Skip if `old_val is None` (init — var didn't exist before this block)
 - Skip if `new_val == old_val`
-- If already pending: keep original `old_val`, update `new_val`
-- Also adds changed var to `store._tl_recently_changed_vars`
+- Always adds changed var to `store._tl_recently_changed_vars` (for chip tinting)
+- Builds `store._tl_pending_var_changes` and calls `_tl_flush_var_changes` only when `_tl_var_notifs_enabled`
 
-`_tl_flush_var_changes()` emits one `renpy.show_screen("_tl_notify", message=...)` for all accumulated changes and clears the dict. Called immediately after each `_tl_diff_route_vars`.
+`_tl_flush_var_changes()` emits one `renpy.show_screen("_tl_notify", message=...)` for all accumulated changes and clears the dict.
 
 `_tl_flush_menu_snap()` handles the complement case: vars that were `None` at menu-present time (not yet set), first assigned inside a menu arm. Called by `_tl_record_before` at the next menu boundary.
 
@@ -84,7 +85,7 @@ A var is *consumed* (`_tl_var_consumed(name)`) when `len(_tl_var_if_seen_keys[na
 ### 5. Recently-changed tracking
 
 `store._tl_recently_changed_vars` is a transient `set()` accumulating vars changed since the last menu. It is:
-- Populated by `_tl_diff_route_vars` and `_tl_flush_menu_snap`
+- Populated by `_tl_py_post_var_diff` and `_tl_flush_menu_snap`
 - Cleared at the start of `_tl_record_before` (each new menu)
 - Used by `_tl_build_route_chips` to keep recently-changed vars pinned to the top of the chip bar
 

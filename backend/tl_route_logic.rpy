@@ -253,6 +253,14 @@ init -2 python:
         return chips
 
 
+    def _tl_snapshot_route_vars():
+        """Return current store values for all known route vars."""
+        return {
+            var_name: getattr(store, var_name, None)
+            for var_name in (getattr(persistent, "_tl_route_var_names", None) or [])
+        }
+
+
     def _tl_format_numeric_change(label, old_val, new_val):
         """Format a numeric var change as '↑N Label' or '↓N Label', omitting N when delta is 1."""
         new_val = float(new_val)

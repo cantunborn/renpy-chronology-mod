@@ -216,9 +216,6 @@ init python:
 
 init -2 python:
 
-    def _tl_new_branch_id():
-        return uuid.uuid4().hex[:12]
-
     def _tl_count_locked_branches():
         descs = getattr(persistent, "_tl_all_branch_descs", None) or []
         return sum(1 for desc in descs if not _tl_eval_seen_fn(desc))
