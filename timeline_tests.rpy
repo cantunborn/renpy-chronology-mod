@@ -1478,4 +1478,3 @@ init python:
             renpy.notify("FAIL: {}/{} tests failed - check debug.txt".format(
                 r.failed, r.passed + r.failed))
 
-        store._tl_test_results = r

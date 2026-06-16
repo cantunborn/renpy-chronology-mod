@@ -72,6 +72,12 @@ init python:
         _store._tl_modal_node       = None
         _store._tl_chap_end_slot    = ""
         _store._tl_ghost_nodes      = []
+
+        ## Drop test runner result object if present — _TLTestResults is a class instance
+        ## and cannot be unpickled without the mod. Clearing it here fixes any saves
+        ## that were contaminated before this was caught.
+        if hasattr(_store, "_tl_test_results"):
+            del _store._tl_test_results
         ## NOTE: _tl_ast_ready and _tl_ast_map are derived from the
         ## static game script (never changes between loads) — do NOT reset them here.
         _tl_log("TL: post-load validation complete ({} nodes)".format(
