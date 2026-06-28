@@ -18,6 +18,10 @@ init -2 python:
             stype = type(node).__name__
             if stype in ("Say", "TranslateSay"):
                 return _tl_say_seen_name(node)
+            if stype == "Translate":
+                for tnode in (getattr(node, "block", None) or []):
+                    if type(tnode).__name__ == "Say":
+                        return _tl_say_seen_name(tnode)
             if stype in ("Jump", "Call", "Return", "Menu"):
                 return None
             node = getattr(node, "next", None)
@@ -64,6 +68,10 @@ init -2 python:
                 node_type = type(node).__name__
                 if node_type in ("Say", "TranslateSay"):
                     return _tl_say_seen_name(node)
+                if node_type == "Translate":
+                    for tnode in (getattr(node, "block", None) or []):
+                        if type(tnode).__name__ == "Say":
+                            return _tl_say_seen_name(tnode)
                 if node_type in ("Jump", "Call", "Return", "Menu", "Label"):
                     return None
                 node = getattr(node, "next", None)
@@ -130,6 +138,15 @@ init -2 python:
                     if say_first is None:
                         say_first = seen_key
                     say_last = seen_key
+            elif node_type == "Translate":
+                for tnode in (getattr(node, "block", None) or []):
+                    if type(tnode).__name__ == "Say":
+                        seen_key = _tl_say_seen_name(tnode)
+                        if seen_key is not None:
+                            if say_first is None:
+                                say_first = seen_key
+                            say_last = seen_key
+                        break
             elif node_type == "Scene" and scene_best is None:
                 img = _tl_scene_stmt_img_name(node)
                 if img:

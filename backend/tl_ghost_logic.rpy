@@ -511,12 +511,8 @@ init python:
             if not run:
                 return
             groups = _tl_partition_if_run(run)
-            prev_ghost = store._tl_ghost_nodes[-1] if store._tl_ghost_nodes else None
-            for group_idx, group in enumerate(groups):
-                cluster = False
-                if group_idx == 0 and prev_ghost:
-                    cluster = _tl_should_cluster(prev_ghost, group[0].get("conditions") or [])
-                _tl_emit_ghost_cluster(group, cluster)
+            for group in groups:
+                _tl_emit_ghost_cluster(group, False)
             for payload in run[1:]:
                 store._tl_skip_ghost_ifs.add(payload["ast_key"])
             _tl_flush_var_changes()

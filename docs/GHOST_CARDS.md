@@ -32,7 +32,7 @@ renpy.ast.If.execute (monkey-patched via _tl_if_execute_patched)
         -> fire branch notification (_tl_notify_branch)
 ```
 
-The hook synthesizes the whole relevant sibling run immediately so mutually exclusive sequential `if`s can appear together as one cluster.
+The hook synthesizes the whole relevant sibling run immediately so mutually exclusive sequential `if`s can appear together as one cluster. Each group is emitted with `cluster_with_prev=False` — no inter-run merging with the previous ghost node.
 
 At the next menu (`_tl_record_before`), `_tl_ghost_nodes` and `_tl_ghost_highlight` are cleared.
 

@@ -7,6 +7,18 @@ that is present in the codebase but not yet committed.
 
 ## Unreleased
 
+### Fix: unseen-option dots and ghost seen state broken on Ren'Py 7 translated games
+
+In Ren'Py 7, Say nodes inside menu option blocks (and after Scene/Jump targets) are wrapped in `Translate` AST nodes. `_tl_make_seen_fn`, `_tl_find_scene_seen_name`, and `_tl_follow_jump_seen_name` only checked for `"Say"` and `"TranslateSay"`, so all dialogue was silently skipped — leaving only Show/Scene image descriptors, which are shared across branches and always evaluate as seen after the first playthrough.
+
+- **`backend/tl_seen_check.rpy`** — all three node-walking functions now handle `"Translate"` by diving into `node.block` and extracting the `Say` inside, then calling `_tl_say_seen_name` as normal.
+
+### Fix: ghost clusters always merged with previous cluster
+
+`_tl_on_if_execute` was checking the last emitted ghost node and merging new clusters with it via `_tl_should_cluster`. This caused unrelated sequential ifs to visually group together incorrectly. Each cluster is now emitted independently with `cluster_with_prev=False`.
+
+- **`backend/tl_ghost_logic.rpy`** — removed `prev_ghost` inter-run merge logic from `_tl_on_if_execute`; `_tl_emit_ghost_cluster` is always called with `False`.
+
 ### Fix: init-phase crash and incorrect runtime filtering in execute patches
 
 Both `_tl_if_execute_patched` and `_tl_python_execute_patched` were being called during Ren'Py's init phase (e.g. `init -1 python:` blocks in game scripts), before store defaults are applied. This caused a `TypeError` in `_tl_py_pre_var_snap` when `_tl_route_var_names` was not yet initialized.
