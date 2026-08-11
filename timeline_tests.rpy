@@ -1054,27 +1054,201 @@ init python:
         After unfreeze, Ren'Py mutates rb.context (the deepcopy) in place.
         The original snap["context"] must stay clean so a second jump gets
         ctx.interacting=False regardless of what happened after the first jump.
+
+        Calls the real _tl_unfreeze_from_snapshot (with RollbackLog.unfreeze
+        mocked out, mirroring _tl_test_snapshot_roots_isolation) rather than
+        re-implementing the deepcopy inline, so a regression in the real
+        function's ctx-copy logic is actually caught here.
         """
-        import copy as _copy
         s = "snapshot_ctx_isolation"
 
-        fake_ctx      = _TLFakeCtx()
+        class _SentinelError(Exception):
+            pass
+
+        try:
+            try:
+                import renpy.rollback as rb_mod
+            except ImportError:
+                import renpy.python as rb_mod
+        except Exception as e:
+            r.check(s, "rollback module importable", False, str(e))
+            return
+
+        RollbackLog = rb_mod.RollbackLog
+        captured    = []
+
+        def mock_unfreeze(self, roots, label):
+            captured.append(self.log[0].context)
+            raise _SentinelError("intercepted")
+
+        fake_ctx = _TLFakeCtx()
         fake_ctx.interacting = False
-        snap          = {"roots": {}, "context": fake_ctx}
+        fake_snap = {"roots": {}, "context": fake_ctx}
 
-        # simulate first unfreeze: deepcopy ctx, then ren'py mutates the copy
-        ctx1 = _copy.deepcopy(snap["context"])
-        ctx1.interacting = True
+        saved_unfreeze_method = RollbackLog.unfreeze
+        try:
+            RollbackLog.unfreeze = mock_unfreeze
 
-        r.check(s, "snap ctx unaffected by first-unfreeze mutation",
-                snap["context"].interacting is False)
+            try:
+                _tl_unfreeze_from_snapshot(fake_snap)
+            except _SentinelError:
+                pass
+            except Exception as e:
+                r.check(s, "no unexpected exception (first call)", False, str(e))
+                return
 
-        # simulate second unfreeze: deepcopy again must give clean ctx
-        ctx2 = _copy.deepcopy(snap["context"])
-        r.check(s, "second unfreeze ctx.interacting clean",
-                ctx2.interacting is False)
+            r.check(s, "unfreeze called once (first call)", len(captured) == 1)
+            if not captured:
+                return
+            ctx1 = captured[0]
 
-        r.check(s, "ctx1 and ctx2 are distinct objects", ctx1 is not ctx2)
+            ## Simulate Ren'Py mutating the returned copy in place after unfreeze —
+            ## must not leak back into the cached snapshot's context.
+            ctx1.interacting = True
+            r.check(s, "snap ctx unaffected by first-unfreeze mutation",
+                    fake_snap["context"].interacting is False)
+
+            try:
+                _tl_unfreeze_from_snapshot(fake_snap)
+            except _SentinelError:
+                pass
+            except Exception as e:
+                r.check(s, "no unexpected exception (second call)", False, str(e))
+                return
+
+            r.check(s, "unfreeze called once (second call)", len(captured) == 2)
+            if len(captured) < 2:
+                return
+            ctx2 = captured[1]
+
+            r.check(s, "second unfreeze ctx.interacting clean",
+                    ctx2.interacting is False)
+            r.check(s, "ctx1 and ctx2 are distinct objects", ctx1 is not ctx2)
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            RollbackLog.unfreeze = saved_unfreeze_method
+
+
+    def _tl_test_snapshot_roots_isolation(r):
+        """
+        _tl_unfreeze_from_snapshot must not hand Ren'Py's real unfreeze() a live
+        reference to snap["roots"]. Real RollbackLog.unfreeze() aliases roots
+        values directly into store_dicts (store[name] = value, no copy), so any
+        store var mutated in place after a jump (dict[key]=x, list.append) would
+        silently corrupt the cached snapshot's roots for every future jump to
+        that same node, since both would point at the same object.
+        """
+        s = "snapshot_roots_isolation"
+
+        class _SentinelError(Exception):
+            pass
+
+        try:
+            try:
+                import renpy.rollback as rb_mod
+            except ImportError:
+                import renpy.python as rb_mod
+        except Exception as e:
+            r.check(s, "rollback module importable", False, str(e))
+            return
+
+        RollbackLog = rb_mod.RollbackLog
+        captured    = []
+
+        def mock_unfreeze(self, roots, label):
+            captured.append(roots)
+            raise _SentinelError("intercepted")
+
+        fake_ctx    = _TLFakeCtx()
+        shared_dict = {"a": 1}
+        fake_snap   = {"roots": {"store.tl_probe": shared_dict}, "context": fake_ctx}
+
+        saved_unfreeze_method = RollbackLog.unfreeze
+        try:
+            RollbackLog.unfreeze = mock_unfreeze
+
+            try:
+                _tl_unfreeze_from_snapshot(fake_snap)
+            except _SentinelError:
+                pass
+            except Exception as e:
+                r.check(s, "no unexpected exception", False, str(e))
+                return
+
+            r.check(s, "unfreeze called once", len(captured) == 1)
+            if not captured:
+                return
+
+            captured_roots = captured[0]
+            r.check(s, "roots dict is a copy, not the original",
+                    captured_roots is not fake_snap["roots"])
+
+            ## Simulate in-place mutation of the live store value after this jump —
+            ## must not leak back into the cached snapshot's roots.
+            captured_roots["store.tl_probe"]["a"] = 999
+            r.check(s, "snap roots unaffected by post-unfreeze mutation",
+                    fake_snap["roots"]["store.tl_probe"]["a"] == 1)
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            RollbackLog.unfreeze = saved_unfreeze_method
+
+
+    def _tl_test_snapshot_capture_isolation(r):
+        """
+        _tl_capture_snapshot must not hand out a live reference to store objects
+        via snap["roots"]. get_roots() returns live references directly into
+        store_dicts, not copies, so any store var mutated in place during later
+        gameplay (dict[key]=x, list.append) — no jump required — would silently
+        corrupt the cached snapshot, since both would point at the same object.
+
+        Calls the real _tl_capture_snapshot() (no mocking needed — capture only
+        reads engine state, it doesn't replace renpy.game.log).
+        """
+        s = "snapshot_capture_isolation"
+        import store as _st
+
+        saved_probe = getattr(_st, "_tl_test_capture_probe", None)
+        try:
+            _st._tl_test_capture_probe = {"a": 1}
+
+            ## get_roots() only returns vars in ever_been_changed, which
+            ## complete(False) (used inside _tl_capture_snapshot) does not
+            ## update — only a cycle=True pass does. Force one cycle so the
+            ## var just set above is actually visible to get_roots(), same
+            ## as it would be after any real interaction happens to run.
+            renpy.game.log.complete(True)
+
+            snap = _tl_capture_snapshot()
+            key = "store._tl_test_capture_probe"
+
+            r.check(s, "probe present in captured roots", key in snap["roots"])
+            if key not in snap["roots"]:
+                return
+
+            captured_probe = snap["roots"][key]
+            r.check(s, "captured roots value is a copy, not the live object",
+                    captured_probe is not _st._tl_test_capture_probe)
+
+            ## Simulate in-place mutation of the live store value after capture —
+            ## must not leak back into the cached snapshot's roots.
+            _st._tl_test_capture_probe["a"] = 999
+            r.check(s, "snap roots unaffected by post-capture mutation",
+                    captured_probe["a"] == 1)
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            if saved_probe is None:
+                try:
+                    del _st._tl_test_capture_probe
+                except AttributeError:
+                    pass
+            else:
+                _st._tl_test_capture_probe = saved_probe
 
 
     ## ── v2 tests ────────────────────────────────────────────────────────────
@@ -1451,6 +1625,8 @@ init python:
         _tl_test_cache_transfer(r)
         _tl_test_unfreeze_builds_rollback_log(r)
         _tl_test_snapshot_ctx_isolation(r)
+        _tl_test_snapshot_roots_isolation(r)
+        _tl_test_snapshot_capture_isolation(r)
         _tl_test_jump_staging(r)
         _tl_test_jump_empty_shadow(r)
         _tl_test_cancel_jump(r)

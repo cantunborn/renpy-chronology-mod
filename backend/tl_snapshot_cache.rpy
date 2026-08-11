@@ -40,6 +40,12 @@ init -2 python:
         is shallow — ctx.info is a live reference that mutates as the game continues.
         All other ctx fields are isolated at unfreeze time via deepcopy in _tl_unfreeze_from_snapshot.
 
+        roots is also deep-copied here: get_roots() returns live references directly into
+        store_dicts, not copies. Without this, any store var mutated in place during later
+        gameplay (dict[key]=x, list.append) — no jump required — would silently corrupt this
+        cached snapshot for every future jump to this node, since both would point at the
+        same object.
+
         In compiled .rpyc files ctx.current is a (filename, serial, linenumber) tuple that
         has_label() cannot resolve. Patched to the enclosing label so RollbackLog.rollback()
         stops correctly at our synthetic entry.
@@ -51,8 +57,13 @@ init -2 python:
             ctx.info = _copy.deepcopy(ctx.info)
         except Exception as e:
             _tl_log("TL snapshot: deepcopy info failed: {}".format(e))
+        try:
+            roots = _copy.deepcopy(renpy.game.log.get_roots())
+        except Exception as e:
+            _tl_log("TL snapshot: deepcopy roots failed: {}".format(e))
+            roots = renpy.game.log.get_roots()
         snap = _TL_PLAIN_DICT()
-        snap["roots"]   = renpy.game.log.get_roots()
+        snap["roots"]   = roots
         snap["context"] = ctx
         # patch ctx.current for compiled .rpyc files where the label is a tuple
         ctx_cur = getattr(ctx, "current", None)
@@ -118,11 +129,19 @@ init -2 python:
         except ImportError:
             import renpy.python as rb_mod
 
-        roots = snap["roots"]
-        # deepcopy ctx so Ren'Py's post-unfreeze mutations don't corrupt the stored snapshot.
+        # deepcopy roots and ctx so Ren'Py's post-unfreeze mutations don't corrupt the
+        # stored snapshot. Ren'Py's real unfreeze() aliases roots values directly into
+        # store_dicts (store[name] = value, no copy) — without this, any store var
+        # mutated in place after this jump (dict[key]=x, list.append) would silently
+        # corrupt this cached snapshot for every future jump to the same node.
+        import copy as _copy
+        try:
+            roots = _copy.deepcopy(snap["roots"])
+        except Exception as e:
+            _tl_log("TL unfreeze: roots deepcopy failed: {}".format(e))
+            roots = snap["roots"]
         # also reset interacting to heal saves made before this fix was applied.
         try:
-            import copy as _copy
             ctx = _copy.deepcopy(snap["context"])
         except Exception as e:
             _tl_log("TL unfreeze: ctx deepcopy failed: {}".format(e))

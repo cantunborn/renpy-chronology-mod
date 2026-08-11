@@ -7,6 +7,19 @@ that is present in the codebase but not yet committed.
 
 ## Unreleased
 
+### Fix: jump-back snapshots corrupted by shared live store references
+
+`_tl_unfreeze_from_snapshot` deep-copied `snap["context"]` but passed `snap["roots"]` straight through unmodified. Real Ren'Py's `RollbackLog.unfreeze()` installs roots values directly into `store_dicts` (`store[name] = value`, no copy), so after a jump, any store variable mutated in place (`dict[key] = x`, `list.append(x)`, rather than reassignment) was mutating the exact same object still referenced by the cached snapshot. A second jump back to the same menu node would then silently pick up the later mutation instead of the node's true historical state. Reproduced live: a store dict jumped to once, mutated in place, then jumped to again returned the post-mutation value instead of the value at capture time.
+
+- **`backend/tl_snapshot_cache.rpy`** — `_tl_unfreeze_from_snapshot` now deep-copies `snap["roots"]` before handing it to `unfreeze()`, same treatment `ctx` already received. Falls back to the original (uncopied) roots on deepcopy failure, matching the existing ctx fallback pattern.
+- **`timeline_tests.rpy`** — added `_tl_test_snapshot_roots_isolation`, mirroring `_tl_test_snapshot_ctx_isolation`: intercepts the real `_tl_unfreeze_from_snapshot` call via a mocked `RollbackLog.unfreeze` and asserts the roots handed to it are a distinct object from `snap["roots"]`, and that mutating one doesn't affect the other. `_tl_test_snapshot_ctx_isolation` itself was then rewritten to use the same mocked-unfreeze pattern (calling the real `_tl_unfreeze_from_snapshot` twice and comparing the two captured `context` copies) instead of re-implementing `copy.deepcopy` inline — the previous version never exercised the real function, so it wouldn't have caught a regression in its ctx-copy logic.
+
+A follow-up audit against real Ren'Py source found the same bug class on the other end of the pipeline: `_tl_capture_snapshot()` stored `snap["roots"] = renpy.game.log.get_roots()` directly — `get_roots()` (per `rollback.py`) also returns live references into `store_dicts`, not copies. So a cached snapshot's roots could be silently corrupted by *ordinary forward gameplay* mutating a store var in place, with no jump involved at all — the unfreeze-side fix above only protected reuse *after* a jump, not the cache's baseline integrity.
+
+- **`backend/tl_snapshot_cache.rpy`** — `_tl_capture_snapshot()` now deep-copies `renpy.game.log.get_roots()` before storing it in `snap["roots"]`, same fallback-on-failure pattern as the unfreeze-side fix.
+- **`timeline_tests.rpy`** — added `_tl_test_snapshot_capture_isolation`: sets a throwaway store var, forces a rollback checkpoint cycle (`renpy.game.log.complete(True)`, needed because `get_roots()` only sees vars in `ever_been_changed`, which a plain `complete(False)` flush doesn't update), captures a real snapshot, mutates the live var in place afterward, and asserts the cached copy is unaffected.
+- Snapshots cached inside saves made *before* this fix are not retroactively repaired — the corrupted value (if any) was already overwritten in place before it could be captured correctly, so there is no original value left to recover. Not addressed further per explicit decision to only fix forward-going captures.
+
 ### Fix: unseen-option dots and ghost seen state broken on Ren'Py 7 translated games
 
 In Ren'Py 7, Say nodes inside menu option blocks (and after Scene/Jump targets) are wrapped in `Translate` AST nodes. `_tl_make_seen_fn`, `_tl_find_scene_seen_name`, and `_tl_follow_jump_seen_name` only checked for `"Say"` and `"TranslateSay"`, so all dialogue was silently skipped — leaving only Show/Scene image descriptors, which are shared across branches and always evaluate as seen after the first playthrough.
