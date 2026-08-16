@@ -278,6 +278,7 @@ for _f in [
     "backend/tl_ghost_logic.rpy",
     "backend/tl_route_logic.rpy",
     "backend/tl_coverage.rpy",
+    "backend/tl_snapshot_cache.rpy",
     "timeline_init.rpy",
 ]:
     load_rpy(_f, _rpy_ns)

@@ -37,15 +37,20 @@ Chapter-end persistence hangs off the same runtime layer. `_tl_chapter_label_cb(
 Each `backend/` file owns one subsystem. All run at `init -2 python:` so they are defined before the top-level hooks.
 
 ### `backend/tl_snapshot_cache.rpy`
-Snapshot capture, cache, and restore. Cache lives on `renpy.game.log._tl_snapshot_cache` (outside `store`, so never in `get_roots()`).
-- `_tl_capture_snapshot()` — flush log, deep-copy `ctx.info`, record `get_roots()`; patch `ctx.current` to enclosing label for compiled `.rpyc` compat; returns `{roots, context}` dict
-- `_tl_cache_menu_snapshot(node_index, snap)` — write snap to `cache["menu"][node_index]`
-- `_tl_cache_chapter_snapshot(label_name, snap)` — write snap to `cache["chapter"][label_name]`
+Snapshot capture, cache, and restore. A `TLSnapshotCache` instance lives on `renpy.game.log._tl_snapshot_cache` (outside `store`, so never in `get_roots()`), exposing `.menu`/`.chapter` dicts (not subscriptable on the cache object itself).
+
+Reference-sharing design: the cache owns exactly one frozen (deep-copied-once) reference for every distinct mutable value ever captured. `_freeze_roots(live_roots)` diffs each live value against the value frozen last capture via `_tl_values_equal(a, b)` (`a is b` fast path, else `pickle.dumps(a) == pickle.dumps(b)`, one generic comparator applied uniformly — no per-type assumptions about which vars mutate). Unchanged → reuse the prior frozen reference; changed/new → fresh `copy.deepcopy`. Unchanged values across many cached snapshots end up as the same object, so Ren'Py's own combined save pickle dedupes them via its memo table automatically.
+
+- `TLSnapshotCache.capture()` (wrapped by `_tl_capture_snapshot()`) — flush log, record `get_roots()` and `renpy.game.log.rollback_limit`; patch `ctx.current` to enclosing label for compiled `.rpyc` compat; freeze roots via `self._freeze_roots(...)`; returns `{"roots": frozen_roots, "ctx": ctx, "rollback_limit": rollback_limit}`
+- `_tl_cache_menu_snapshot(node_index, snap)` — write snap to `cache.menu[node_index]`
+- `_tl_cache_chapter_snapshot(label_name, snap)` — write snap to `cache.chapter[label_name]`
 - `_tl_get_menu_snapshot(node_index)` — lookup
 - `_tl_get_chapter_snapshot(label_name)` — lookup
 - `_tl_init_snapshot_cache()` — ensure cache exists on current log (called by `_tl_on_load`)
-- `_tl_transfer_snapshot_cache(new_log)` — copy cache from current log to new_log (called during unfreeze)
-- `_tl_unfreeze_from_snapshot(snap)` — deep-copy `snap["context"]` (so Ren'Py's post-unfreeze mutations don't corrupt the stored snap) and reset `ctx.interacting = False` (handles old saves where interacting was baked in); build synthetic `RollbackLog`; copy cache to new log; call `unfreeze()` — atomically replaces live game state
+- `_tl_transfer_snapshot_cache(new_log)` — `TLSnapshotCache.transfer_to`: sets `new_log._tl_snapshot_cache = self` (called during unfreeze)
+- `_tl_build_and_unfreeze(roots, ctx, log_prefix, rollback_limit)` — shared tail of both unfreeze paths: force `ctx.interacting = False`; build synthetic single-entry `RollbackLog` with `rollback_limit` set to the value passed in (captured at snapshot time — `unfreeze()`'s internal `rollback()` decrements it by 1 consuming the entry, the same cost a real load pays, so this reproduces "made a save right here, then loaded it" rather than resetting rollback depth); copy cache to new log; call `unfreeze()` — atomically replaces live game state
+- `_tl_unfreeze_legacy(snap)` — pre-blob `{"roots", "context"}` snaps: deep-copies both (Ren'Py's real `unfreeze()` aliases roots into `store_dicts`, uncopied); deepcopy failures propagate rather than falling back to a live/aliased reference; no historical `rollback_limit` was ever captured, falls back to `renpy.config.hard_rollback_limit`
+- `_tl_unfreeze_from_snapshot(snap)` — dispatches on shape: `"context"` key present → legacy → `_tl_unfreeze_legacy()`; otherwise current live shape → deep-copy `roots`/`ctx` fresh (roots may still share frozen references with other cache entries). Both converge on `_tl_build_and_unfreeze`
 
 ### `backend/tl_saveload.rpy`
 Jump control: snapshot-primary, disk saves as backward-compat fallback. Only disk write is the recovery save.

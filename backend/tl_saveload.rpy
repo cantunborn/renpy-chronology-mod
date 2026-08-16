@@ -110,7 +110,14 @@ init -2 python:
         renpy.game._tl_pending_snap = snap
 
     def _valid_snap(snap):
-        return bool(snap and snap.get("roots") and snap.get("context") is not None)
+        """Accepts both the current live-reference shape and the legacy roots/context shape."""
+        if not snap:
+            return False
+        if not snap.get("roots"):
+            return False
+        if "context" in snap:
+            return snap.get("context") is not None
+        return "ctx" in snap
 
     def _find_slot(node_index, hist, context):
         """

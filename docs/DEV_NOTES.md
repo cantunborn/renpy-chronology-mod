@@ -30,21 +30,29 @@ Shared AST utilities used by multiple backend files. Loads first (alphabetical s
 
 Snapshot capture, cache management, and restore. All cache and snap dicts are plain `builtins.dict` (not `RevertableDict`) so RenPy's rollback system cannot revert them.
 
-**Cache location:** `renpy.game.log._tl_snapshot_cache` — keyed `{"menu": {node_index: snap}, "chapter": {label_name: snap}}`. Stored on the log object so it is outside `store` and never in `get_roots()`, eliminating recursive save-file cycles.
+**Cache location and design:** a `TLSnapshotCache` instance lives at `renpy.game.log._tl_snapshot_cache`, with `.menu` (`{node_index: snap}`) and `.chapter` (`{label_name: snap}`) attributes — not subscriptable on the cache object itself. Stored on the log object so it is outside `store` and never in `get_roots()`, eliminating recursive save-file cycles.
 
-**Functions:**
+The cache is a **reference-sharing / persistent-data-structure** design: it owns exactly one frozen (deep-copied-once) reference for every distinct mutable value ever captured. `_freeze_roots(live_roots)` diffs each live value against the value frozen in the previous capture (`self._last_roots`) via `_tl_values_equal(a, b)` — a single generic comparator (`a is b` fast path, else `pickle.dumps(a) == pickle.dumps(b)`) applied uniformly to every value type, with no assumptions about which game vars do or don't mutate. Unchanged values reuse the prior frozen reference; changed or new values get a fresh `copy.deepcopy`. Because unchanged values across many cached menus end up pointing at the same object, Ren'Py's own single combined save pickle dedupes them for free via its normal memo table when the whole `renpy.game.log` (cache included) is serialized in one `pickle.dump()` call — restoring the memoization the earlier blob/zdict approach had accidentally broken (see changelog).
+
+**Class methods:**
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `_freeze_roots` | `(self, live_roots) → dict` | The reuse/copy decision described above. `self._last_roots` starts `None`; the first-ever capture has nothing to compare against and deep-copies everything. Updates `self._last_roots` to the newly frozen dict before returning it. |
+| `capture` | `(self) → dict` | Flushes pending store deltas (`log.complete(False)`), takes a `rollback_copy()` of the current context, patches `ctx.current` to an enclosing label when needed for compiled `.rpyc` files, records `renpy.game.log.get_roots()` and `renpy.game.log.rollback_limit`, freezes the roots via `self._freeze_roots(...)`. Returns `{"roots": frozen_roots, "ctx": ctx, "rollback_limit": rollback_limit}`. |
+| `cache_menu` / `cache_chapter` | `(self, key, snap) → None` | Writes snap to `self.menu[key]` / `self.chapter[key]`. |
+| `get_menu` / `get_chapter` | `(self, key) → dict or None` | `self.menu.get(key)` / `self.chapter.get(key)`. |
+| `transfer_to` | `(self, new_log) → None` | Sets `new_log._tl_snapshot_cache = self`; called before `unfreeze()` so the cache survives the log replacement. |
+
+**Free-function wrappers** (`_tl_make_cache`, `_tl_get_snapshot_cache`, `_tl_init_snapshot_cache`, `_tl_capture_snapshot`, `_tl_cache_menu_snapshot`, `_tl_cache_chapter_snapshot`, `_tl_get_menu_snapshot`, `_tl_get_chapter_snapshot`, `_tl_transfer_snapshot_cache`) all delegate to the singleton instance at `renpy.game.log._tl_snapshot_cache` — no external caller's call signature changed when the cache moved from a dict to a class.
+
+**Restore-path functions:**
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `_tl_get_snapshot_cache` | `() → dict` | Returns the cache dict on the current log, creating it if absent. |
-| `_tl_init_snapshot_cache` | `() → None` | Ensures cache exists on the current log; called by `_tl_on_load` after every save load. |
-| `_tl_capture_snapshot` | `() → dict` | Flushes pending store deltas (`log.complete(False)`), takes a `rollback_copy()` of the current context, deep-copies `ctx.info` (display state), patches `ctx.current` to an enclosing label when needed for compiled `.rpyc` files, and records `renpy.game.log.get_roots()`. Returns `{"roots": ..., "context": ctx}`. |
-| `_tl_cache_menu_snapshot` | `(node_index, snap) → None` | Writes snap to `cache["menu"][node_index]`. |
-| `_tl_cache_chapter_snapshot` | `(label_name, snap) → None` | Writes snap to `cache["chapter"][label_name]`. |
-| `_tl_get_menu_snapshot` | `(node_index) → dict or None` | Lookup in `cache["menu"]`; returns None if cache or key absent. |
-| `_tl_get_chapter_snapshot` | `(label_name) → dict or None` | Lookup in `cache["chapter"]`; returns None if absent. |
-| `_tl_transfer_snapshot_cache` | `(new_log) → None` | Copies `_tl_snapshot_cache` from the current log to `new_log`; called before `unfreeze()` so the cache survives the log replacement. |
-| `_tl_unfreeze_from_snapshot` | `(snap) → None (never returns)` | Deep-copies `snap["context"]` so Ren'Py's post-unfreeze mutations (e.g. `ctx.interacting = True`) don't corrupt the stored snapshot; resets `ctx.interacting = False` unconditionally (heals old saves where interacting was baked in). Builds a synthetic single-entry `RollbackLog`, copies the snapshot cache to the new log, then calls `unfreeze()` — atomically replaces live game state with the captured state. |
+| `_tl_build_and_unfreeze` | `(roots, ctx, log_prefix, rollback_limit) → None (never returns)` | Shared tail of both unfreeze paths: forces `ctx.interacting = False`, builds a synthetic single-entry `RollbackLog` with `rollback_limit` set to the value passed in (captured at snapshot time, not hardcoded — `RollbackLog.rollback()` inside `unfreeze()` decrements it by 1 while consuming the entry, the same cost a real load pays, so the player's rollback allowance lands where a real save-then-load at that point would have left it), copies the snapshot cache to the new log, then calls `unfreeze()` — atomically replaces live game state with the captured state. |
+| `_tl_unfreeze_legacy` | `(snap) → None (never returns)` | Handles pre-blob `{"roots": ..., "context": ...}` snaps: `copy.deepcopy`s both before use (Ren'Py's real `unfreeze()` aliases roots values directly into `store_dicts`, so without a copy, in-place mutation after the jump would corrupt the cached snapshot). Deepcopy failures propagate rather than falling back to live/aliased references — all-or-nothing, matching the capture-side principle. No historical `rollback_limit` was ever captured for these, so it falls back to `renpy.config.hard_rollback_limit`. Only serves stale, not-yet-revisited nodes — every revisit replaces the cache entry with the current live shape. |
+| `_tl_unfreeze_from_snapshot` | `(snap) → None (never returns)` | Dispatches on shape: `"context"` key present → legacy pre-blob shape → `_tl_unfreeze_legacy()`; otherwise the current live shape (`"roots"`/`"ctx"`/`"rollback_limit"`) → deep-copies `roots`/`ctx` fresh (roots may still share frozen references with other cache entries, so the live store must never end up aliased to a cache-owned object). Both converge on `_tl_build_and_unfreeze`. |
 
 ---
 
@@ -821,6 +829,18 @@ Tests RenPy-dependent behavior that cannot be run outside the engine.
 | `shadow_path_consume` | 2 | `_shadow_orig_chosen` stamped on divergence; path trimmed |
 | `shadow_path_no_diverge` | 3 | No divergence flag when same choice made; path consumed to None |
 | `shadow_path_validate` | 3 | Corrupted shadow path reset to None; valid list and None preserved |
+| `snapshot_capture_isolation` | 5 | `_tl_capture_snapshot` isolation: a live-store mutation made after capture never leaks back into the cached snapshot's frozen roots |
+| `capture_snapshot_contract` | 8 | `_tl_capture_snapshot` returns exactly `{"roots", "ctx", "rollback_limit"}`; `ctx.interacting is False`; `rollback_limit` matches the live log at capture time |
+| `capture_snapshot_reuses_unchanged_values` | 6 | Two captures back to back: every value unchanged between them is the *same object* in both snapshots' roots; only the value that actually changed gets its own distinct frozen copy — the core reference-sharing contract |
+| `unfreeze_live_path` | 16 | `_tl_unfreeze_from_snapshot` on a live-shaped snap: full `Rollback`/`RollbackLog` field contract (`checkpoint`, `hard_checkpoint`, `stores={}`, `objects=[]`, `label="_after_load"`), decoded roots/ctx are copies not aliases of the snap's own values (which may themselves be shared with other cache entries) |
+| `unfreeze_live_repeat_isolation` | 5 | Unfreezing the same cached snap twice never cross-contaminates, even if the caller mutates what the first call returned |
+| `unfreeze_legacy_direct` | 14 | `_tl_unfreeze_legacy` (pre-blob deepcopy path) preserves its original behavior exactly, called directly; includes a hard-fail sub-test (a `threading.Lock()` value that cannot be deepcopied) asserting the exception propagates rather than falling back to a live/aliased reference |
+| `unfreeze_dispatch_routes_by_shape` | 4 | `_tl_unfreeze_from_snapshot` routes purely on shape — live-shaped snaps never touch `snap["context"]`, legacy-shaped snaps never touch a nonexistent `snap["ctx"]` |
+| `valid_snap_shapes` | 9 | `_valid_snap` (`tl_saveload.rpy`) accepts both the live shape and the legacy shape, rejects everything else — enumerated case by case |
+| `snapshot_cache_mixed_shapes` | 8 | A cache holding both a legacy-shaped and a live-shaped entry at once (real post-upgrade state) retrieves and unfreezes both correctly through the public path, using `.menu`/`.chapter` attribute access |
+| `snapshot_cache_save_round_trip` | 10 | Writes a real save via `renpy.save()` to a private slot, reads the file back with raw `zipfile`/`pickle` (never `renpy.load()`), and asserts: exactly one `TLSnapshotCache` survives, menu/chapter counts match the live cache, every snapshot has the roots/ctx/rollback_limit shape, and no object shared by reference across cached snapshots carries divergent content at different appearances |
+
+> **Note:** the suite count/table above predates several suites already present in `timeline_tests.rpy` (`cache_transfer`, `unfreeze_builds_rollback_log`, `snapshot_ctx_isolation`, `snapshot_roots_isolation`, `jump_staging`, `jump_empty_shadow`, `cancel_jump`, `jump_chapter_staging`, `on_game_start`, `on_load`, `interact_callback_var_flush`, `log_truncation`, `pre_save_slot_format`, `jump_uses_pre_save`, `cache_not_in_get_roots`, `option_filtering`, `locked_options`, `ghost_gate_guards`, `ghost_on_if_execute`) — this table has been out of sync with the code for a while. Only the snapshot rows above were added/updated for the reference-sharing cache redesign; a full resync is a separate task.
 
 ---
 

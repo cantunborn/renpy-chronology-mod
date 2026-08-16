@@ -84,6 +84,77 @@ init python:
             for key, old_val in self._saved_pers.items():
                 setattr(persistent, key, old_val)
 
+    class _TLMockedUnfreeze(object):
+        """
+        Context manager: monkeypatches RollbackLog.unfreeze to record its call
+        args instead of running Ren'Py's real (irreversible) unfreeze, restoring
+        the original method on exit. Every unfreeze-path test needs exactly this
+        setup — only what they do with the captured calls differs — so the mock
+        always records the same (log_inst, roots, label) tuple per call, and
+        each test pulls out whichever piece(s) it cares about.
+
+        Usage:
+            with _TLMockedUnfreeze(r, s) as m:
+                if not m.call(_tl_unfreeze_from_snapshot, fake_snap):
+                    return
+                log_inst, roots, label = m.captured[0]
+                ...
+        """
+        class _Sentinel(Exception):
+            pass
+
+        def __init__(self, r, s):
+            self.r            = r
+            self.s            = s
+            self.captured     = []
+            self._RollbackLog = None
+            self._saved       = None
+
+        def __enter__(self):
+            try:
+                try:
+                    import renpy.rollback as rb_mod
+                except ImportError:
+                    import renpy.python as rb_mod
+            except Exception as e:
+                self.r.check(self.s, "rollback module importable", False, str(e))
+                return self
+
+            captured = self.captured
+
+            def mock_unfreeze(self_, roots, label):
+                captured.append((self_, roots, label))
+                raise _TLMockedUnfreeze._Sentinel("intercepted")
+
+            self._RollbackLog          = rb_mod.RollbackLog
+            self._saved                = rb_mod.RollbackLog.unfreeze
+            rb_mod.RollbackLog.unfreeze = mock_unfreeze
+            return self
+
+        def __exit__(self, *_):
+            if self._RollbackLog is not None:
+                self._RollbackLog.unfreeze = self._saved
+
+        def call(self, fn, *args, **kwargs):
+            """
+            Call fn(*args), swallowing the sentinel unfreeze() raises when
+            reached. Returns False if the module import failed or fn raised
+            anything else (reporting via r.check first) — callers should
+            `return` immediately when this returns False, same as every
+            unfreeze test did with its own inline try/except before.
+            """
+            if self._RollbackLog is None:
+                return False
+            check_label = kwargs.pop("check_label", "no unexpected exception")
+            try:
+                fn(*args)
+            except _TLMockedUnfreeze._Sentinel:
+                pass
+            except Exception as e:
+                self.r.check(self.s, check_label, False, str(e))
+                return False
+            return True
+
     ## ─────────────────────────────────────────────────────────────────────────
     ## Micro test framework
     ## ─────────────────────────────────────────────────────────────────────────
@@ -813,6 +884,103 @@ init python:
                     pass
 
 
+    def _tl_test_snapshot_cache_save_round_trip(r):
+        """
+        Writes a real save to disk with renpy.save() and reads the resulting
+        file back with plain zipfile/pickle (never renpy.load() — that would
+        replace the live store and jump execution, which a test running mid-
+        game must not do). Verifies what Ren'Py's own pickler actually did to
+        the snapshot cache: exactly one TLSnapshotCache survives the round
+        trip, its menu/chapter counts match the live cache, every snapshot
+        keeps the roots/ctx/rollback_limit shape, and — the check that matters
+        most — no object shared by reference across multiple cached snapshots
+        comes back with different content at different appearances (which
+        would mean something mutated a supposedly-frozen value in place).
+        """
+        s = "snapshot_cache_save_round_trip"
+        import os, zipfile, pickle
+
+        _savedir = renpy.config.savedir
+        _slot    = "_tl_test_roundtrip"
+        _path    = None
+        try:
+            live_cache = _tl_get_snapshot_cache()
+            r.check(s, "live cache has at least one menu snapshot to check",
+                    len(live_cache.menu) > 0)
+
+            try:
+                renpy.save(_slot, include_screenshot=False)
+            except TypeError:
+                renpy.save(_slot)
+
+            for _ext in ("-LT1.save", ".save"):
+                _p = os.path.join(_savedir, _slot + _ext)
+                if os.path.exists(_p):
+                    _path = _p
+                    break
+            r.check(s, "save file exists", _path is not None)
+            if _path is None:
+                return
+
+            with zipfile.ZipFile(_path, "r") as zf:
+                log_bytes = zf.read("log")
+
+            roots, log_obj = pickle.loads(log_bytes)
+            r.check(s, "unpickled top-level is (roots, log)",
+                    isinstance(roots, dict) and log_obj is not None)
+
+            cache = getattr(log_obj, "_tl_snapshot_cache", None)
+            r.check(s, "unpickled log carries a snapshot cache", cache is not None)
+            if cache is None:
+                return
+
+            r.check(s, "unpickled cache is a single TLSnapshotCache",
+                    type(cache).__name__ == "TLSnapshotCache")
+            r.check(s, "menu count matches live cache",
+                    len(cache.menu) == len(live_cache.menu),
+                    "got {} expected {}".format(len(cache.menu), len(live_cache.menu)))
+            r.check(s, "chapter count matches live cache",
+                    len(cache.chapter) == len(live_cache.chapter),
+                    "got {} expected {}".format(len(cache.chapter), len(live_cache.chapter)))
+
+            all_snaps = list(cache.menu.values()) + list(cache.chapter.values())
+            malformed = [
+                snap for snap in all_snaps
+                if not isinstance(snap, dict) or "roots" not in snap
+            ]
+            r.check(s, "every unpickled snapshot has a roots dict", not malformed,
+                    "{} malformed snapshot(s)".format(len(malformed)))
+
+            ## Mutation-after-freeze check: every object id shared across
+            ## snapshots must carry identical content everywhere it appears.
+            id_to_bytes = {}
+            mismatches  = []
+            for snap in all_snaps:
+                for key, value in snap.get("roots", {}).items():
+                    try:
+                        value_bytes = pickle.dumps(value, protocol=2)
+                    except Exception:
+                        continue
+                    vid = id(value)
+                    if vid in id_to_bytes:
+                        if id_to_bytes[vid] != value_bytes:
+                            mismatches.append(key)
+                    else:
+                        id_to_bytes[vid] = value_bytes
+            r.check(s, "no shared object has divergent content across snapshots",
+                    not mismatches,
+                    "mismatched keys: {}".format(mismatches[:5]))
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            try:
+                if _path and os.path.exists(_path):
+                    os.remove(_path)
+            except Exception:
+                pass
+
+
     def _tl_test_pre_save_slot_format(r):
         """_tl_pre_save_slot produces correct format and hash semantics."""
         s = "pre_save_slot"
@@ -900,6 +1068,14 @@ init python:
         """
         s = "cache_not_in_get_roots"
 
+        def _decode(snap):
+            """Return (roots, ctx) for either the live shape or the legacy shape."""
+            if not hasattr(snap, "get"):
+                return None, None
+            if "context" in snap:
+                return snap.get("roots"), snap.get("context")
+            return snap.get("roots"), snap.get("ctx")
+
         cache = getattr(renpy.game.log, "_tl_snapshot_cache", None)
         r.check(s, "cache exists on log", cache is not None,
                 "play through a menu first")
@@ -912,15 +1088,14 @@ init python:
         r.check(s, "cache object not a root value",
                 not any(v is cache for v in roots.values()))
 
-        menu_snaps = cache.get("menu", {})
-        chap_snaps = cache.get("chapter", {})
+        menu_snaps = cache.menu
+        chap_snaps = cache.chapter
         r.check(s, "cache has entries", len(menu_snaps) + len(chap_snaps) > 0,
                 "menu={} chapter={}".format(len(menu_snaps), len(chap_snaps)))
 
         label_bad = []
         for idx, snap in menu_snaps.items():
-            _roots = snap.get("roots") if hasattr(snap, "get") else None
-            _ctx   = snap.get("context") if hasattr(snap, "get") else None
+            _roots, _ctx = _decode(snap)
             r.check(s, "menu[{}] roots non-empty dict".format(idx),
                     hasattr(_roots, "items") and bool(_roots),
                     "snap_type={} roots_type={} roots_len={}".format(
@@ -934,11 +1109,11 @@ init python:
                 if not renpy.game.script.has_label(cur):
                     label_bad.append((idx, cur))
         for lbl, snap in chap_snaps.items():
-            _cr = snap.get("roots") if hasattr(snap, "get") else None
+            _cr, _cc = _decode(snap)
             r.check(s, "chapter['{}'] roots non-empty dict".format(lbl),
                     hasattr(_cr, "items") and bool(_cr))
             r.check(s, "chapter['{}'] context not None".format(lbl),
-                    snap.get("context") is not None if hasattr(snap, "get") else False)
+                    _cc is not None)
 
         r.check(s, "all menu snapshot contexts resolve via has_label",
                 len(label_bad) == 0, "bad={}".format(label_bad))
@@ -960,8 +1135,8 @@ init python:
 
         saved_cache = getattr(renpy.game.log, "_tl_snapshot_cache", None)
         fake_cache  = _tl_make_cache()
-        fake_cache["menu"][99]          = "sentinel"
-        fake_cache["chapter"]["lbl99"]  = "sentinel2"
+        fake_cache.menu[99]          = "sentinel"
+        fake_cache.chapter["lbl99"]  = "sentinel2"
         renpy.game.log._tl_snapshot_cache = fake_cache
 
         try:
@@ -971,10 +1146,10 @@ init python:
             r.check(s, "cache copied to new_log", transferred is fake_cache)
             r.check(s, "menu entry preserved",
                     transferred is not None and
-                    transferred.get("menu", {}).get(99) == "sentinel")
+                    transferred.menu.get(99) == "sentinel")
             r.check(s, "chapter entry preserved",
                     transferred is not None and
-                    transferred.get("chapter", {}).get("lbl99") == "sentinel2")
+                    transferred.chapter.get("lbl99") == "sentinel2")
         finally:
             if saved_cache is not None:
                 renpy.game.log._tl_snapshot_cache = saved_cache
@@ -990,62 +1165,35 @@ init python:
         """
         s = "unfreeze_builds_rollback_log"
 
-        class _SentinelError(Exception):
-            pass
-
-        try:
-            try:
-                import renpy.rollback as rb_mod
-            except ImportError:
-                import renpy.python as rb_mod
-        except Exception as e:
-            r.check(s, "rollback module importable", False, str(e))
-            return
-
-        RollbackLog = rb_mod.RollbackLog
-        captured    = []
-
-        def mock_unfreeze(self, roots, label):
-            captured.append(self)
-            raise _SentinelError("intercepted")
-
         fake_ctx  = _TLFakeCtx()
         fake_snap = {"roots": {"store._tl_history": []}, "context": fake_ctx}
 
-        saved_unfreeze_method = RollbackLog.unfreeze
-        try:
-            RollbackLog.unfreeze = mock_unfreeze
-
+        with _TLMockedUnfreeze(r, s) as m:
+            if not m.call(_tl_unfreeze_from_snapshot, fake_snap):
+                return
             try:
-                _tl_unfreeze_from_snapshot(fake_snap)
-            except _SentinelError:
-                pass
+                r.check(s, "unfreeze called once",     len(m.captured) == 1)
+                if not m.captured:
+                    return
+
+                log_inst, _roots, _label = m.captured[0]
+                expected_rollback_limit = getattr(renpy.config, "hard_rollback_limit", 1) or 1
+                r.check(s, "log has 1 entry",          len(log_inst.log) == 1)
+                r.check(s, "rollback_limit is legacy fallback",
+                        log_inst.rollback_limit == expected_rollback_limit,
+                        "got {} expected {}".format(log_inst.rollback_limit, expected_rollback_limit))
+
+                if not log_inst.log:
+                    return
+                rb = log_inst.log[0]
+                r.check(s, "rb.checkpoint=True",        rb.checkpoint is True)
+                r.check(s, "rb.hard_checkpoint=True",   rb.hard_checkpoint is True)
+                r.check(s, "rb.stores={}",              rb.stores == {})
+                r.check(s, "rb.objects=[]",             rb.objects == [])
+                r.check(s, "rb.context is copy not original", rb.context is not fake_ctx)
+                r.check(s, "rb.context.interacting is False",  getattr(rb.context, "interacting", "MISSING") is False)
             except Exception as e:
-                r.check(s, "no unexpected exception", False, str(e))
-                return
-
-            r.check(s, "unfreeze called once",     len(captured) == 1)
-            if not captured:
-                return
-
-            log_inst = captured[0]
-            r.check(s, "log has 1 entry",          len(log_inst.log) == 1)
-            r.check(s, "rollback_limit is 1",      log_inst.rollback_limit == 1)
-
-            if not log_inst.log:
-                return
-            rb = log_inst.log[0]
-            r.check(s, "rb.checkpoint=True",        rb.checkpoint is True)
-            r.check(s, "rb.hard_checkpoint=True",   rb.hard_checkpoint is True)
-            r.check(s, "rb.stores={}",              rb.stores == {})
-            r.check(s, "rb.objects=[]",             rb.objects == [])
-            r.check(s, "rb.context is copy not original", rb.context is not fake_ctx)
-            r.check(s, "rb.context.interacting is False",  getattr(rb.context, "interacting", "MISSING") is False)
-
-        except Exception as e:
-            r.check(s, "no exception", False, str(e))
-        finally:
-            RollbackLog.unfreeze = saved_unfreeze_method
+                r.check(s, "no exception", False, str(e))
 
 
     def _tl_test_snapshot_ctx_isolation(r):
@@ -1062,73 +1210,46 @@ init python:
         """
         s = "snapshot_ctx_isolation"
 
-        class _SentinelError(Exception):
-            pass
-
-        try:
-            try:
-                import renpy.rollback as rb_mod
-            except ImportError:
-                import renpy.python as rb_mod
-        except Exception as e:
-            r.check(s, "rollback module importable", False, str(e))
-            return
-
-        RollbackLog = rb_mod.RollbackLog
-        captured    = []
-
-        def mock_unfreeze(self, roots, label):
-            captured.append(self.log[0].context)
-            raise _SentinelError("intercepted")
-
         fake_ctx = _TLFakeCtx()
         fake_ctx.interacting = False
         fake_snap = {"roots": {}, "context": fake_ctx}
 
-        saved_unfreeze_method = RollbackLog.unfreeze
-        try:
-            RollbackLog.unfreeze = mock_unfreeze
-
+        with _TLMockedUnfreeze(r, s) as m:
             try:
-                _tl_unfreeze_from_snapshot(fake_snap)
-            except _SentinelError:
-                pass
+                if not m.call(
+                    _tl_unfreeze_from_snapshot, fake_snap,
+                    check_label="no unexpected exception (first call)"
+                ):
+                    return
+
+                r.check(s, "unfreeze called once (first call)", len(m.captured) == 1)
+                if not m.captured:
+                    return
+                ctx1 = m.captured[0][0].log[0].context
+
+                ## Simulate Ren'Py mutating the returned copy in place after unfreeze —
+                ## must not leak back into the cached snapshot's context.
+                ctx1.interacting = True
+                r.check(s, "snap ctx unaffected by first-unfreeze mutation",
+                        fake_snap["context"].interacting is False)
+
+                if not m.call(
+                    _tl_unfreeze_from_snapshot, fake_snap,
+                    check_label="no unexpected exception (second call)"
+                ):
+                    return
+
+                r.check(s, "unfreeze called once (second call)", len(m.captured) == 2)
+                if len(m.captured) < 2:
+                    return
+                ctx2 = m.captured[1][0].log[0].context
+
+                r.check(s, "second unfreeze ctx.interacting clean",
+                        ctx2.interacting is False)
+                r.check(s, "ctx1 and ctx2 are distinct objects", ctx1 is not ctx2)
+
             except Exception as e:
-                r.check(s, "no unexpected exception (first call)", False, str(e))
-                return
-
-            r.check(s, "unfreeze called once (first call)", len(captured) == 1)
-            if not captured:
-                return
-            ctx1 = captured[0]
-
-            ## Simulate Ren'Py mutating the returned copy in place after unfreeze —
-            ## must not leak back into the cached snapshot's context.
-            ctx1.interacting = True
-            r.check(s, "snap ctx unaffected by first-unfreeze mutation",
-                    fake_snap["context"].interacting is False)
-
-            try:
-                _tl_unfreeze_from_snapshot(fake_snap)
-            except _SentinelError:
-                pass
-            except Exception as e:
-                r.check(s, "no unexpected exception (second call)", False, str(e))
-                return
-
-            r.check(s, "unfreeze called once (second call)", len(captured) == 2)
-            if len(captured) < 2:
-                return
-            ctx2 = captured[1]
-
-            r.check(s, "second unfreeze ctx.interacting clean",
-                    ctx2.interacting is False)
-            r.check(s, "ctx1 and ctx2 are distinct objects", ctx1 is not ctx2)
-
-        except Exception as e:
-            r.check(s, "no exception", False, str(e))
-        finally:
-            RollbackLog.unfreeze = saved_unfreeze_method
+                r.check(s, "no exception", False, str(e))
 
 
     def _tl_test_snapshot_roots_isolation(r):
@@ -1142,71 +1263,37 @@ init python:
         """
         s = "snapshot_roots_isolation"
 
-        class _SentinelError(Exception):
-            pass
-
-        try:
-            try:
-                import renpy.rollback as rb_mod
-            except ImportError:
-                import renpy.python as rb_mod
-        except Exception as e:
-            r.check(s, "rollback module importable", False, str(e))
-            return
-
-        RollbackLog = rb_mod.RollbackLog
-        captured    = []
-
-        def mock_unfreeze(self, roots, label):
-            captured.append(roots)
-            raise _SentinelError("intercepted")
-
         fake_ctx    = _TLFakeCtx()
         shared_dict = {"a": 1}
         fake_snap   = {"roots": {"store.tl_probe": shared_dict}, "context": fake_ctx}
 
-        saved_unfreeze_method = RollbackLog.unfreeze
-        try:
-            RollbackLog.unfreeze = mock_unfreeze
-
+        with _TLMockedUnfreeze(r, s) as m:
+            if not m.call(_tl_unfreeze_from_snapshot, fake_snap):
+                return
             try:
-                _tl_unfreeze_from_snapshot(fake_snap)
-            except _SentinelError:
-                pass
+                r.check(s, "unfreeze called once", len(m.captured) == 1)
+                if not m.captured:
+                    return
+
+                captured_roots = m.captured[0][1]
+                r.check(s, "roots dict is a copy, not the original",
+                        captured_roots is not fake_snap["roots"])
+
+                ## Simulate in-place mutation of the live store value after this jump —
+                ## must not leak back into the cached snapshot's roots.
+                captured_roots["store.tl_probe"]["a"] = 999
+                r.check(s, "snap roots unaffected by post-unfreeze mutation",
+                        fake_snap["roots"]["store.tl_probe"]["a"] == 1)
             except Exception as e:
-                r.check(s, "no unexpected exception", False, str(e))
-                return
-
-            r.check(s, "unfreeze called once", len(captured) == 1)
-            if not captured:
-                return
-
-            captured_roots = captured[0]
-            r.check(s, "roots dict is a copy, not the original",
-                    captured_roots is not fake_snap["roots"])
-
-            ## Simulate in-place mutation of the live store value after this jump —
-            ## must not leak back into the cached snapshot's roots.
-            captured_roots["store.tl_probe"]["a"] = 999
-            r.check(s, "snap roots unaffected by post-unfreeze mutation",
-                    fake_snap["roots"]["store.tl_probe"]["a"] == 1)
-
-        except Exception as e:
-            r.check(s, "no exception", False, str(e))
-        finally:
-            RollbackLog.unfreeze = saved_unfreeze_method
+                r.check(s, "no exception", False, str(e))
 
 
     def _tl_test_snapshot_capture_isolation(r):
         """
-        _tl_capture_snapshot must not hand out a live reference to store objects
-        via snap["roots"]. get_roots() returns live references directly into
-        store_dicts, not copies, so any store var mutated in place during later
-        gameplay (dict[key]=x, list.append) — no jump required — would silently
-        corrupt the cached snapshot, since both would point at the same object.
-
-        Calls the real _tl_capture_snapshot() (no mocking needed — capture only
-        reads engine state, it doesn't replace renpy.game.log).
+        _tl_capture_snapshot must not hand out a live reference to store objects.
+        Every mutable value in the captured roots is a frozen (deep-copied)
+        object owned by the cache — mutating the live store after capture must
+        never reach back into the already-captured snapshot.
         """
         s = "snapshot_capture_isolation"
         import store as _st
@@ -1224,20 +1311,23 @@ init python:
 
             snap = _tl_capture_snapshot()
             key = "store._tl_test_capture_probe"
+            roots = snap.get("roots", {})
 
-            r.check(s, "probe present in captured roots", key in snap["roots"])
-            if key not in snap["roots"]:
+            r.check(s, "probe present in captured roots", key in roots)
+            if key not in roots:
                 return
 
-            captured_probe = snap["roots"][key]
+            captured_probe = roots[key]
             r.check(s, "captured roots value is a copy, not the live object",
                     captured_probe is not _st._tl_test_capture_probe)
+            r.check(s, "captured roots value equals live value at capture time",
+                    captured_probe == {"a": 1})
 
             ## Simulate in-place mutation of the live store value after capture —
-            ## must not leak back into the cached snapshot's roots.
+            ## must not leak back into the cached snapshot's frozen roots.
             _st._tl_test_capture_probe["a"] = 999
-            r.check(s, "snap roots unaffected by post-capture mutation",
-                    captured_probe["a"] == 1)
+            r.check(s, "cached snapshot unaffected by post-capture mutation",
+                    snap["roots"][key]["a"] == 1)
 
         except Exception as e:
             r.check(s, "no exception", False, str(e))
@@ -1249,6 +1339,402 @@ init python:
                     pass
             else:
                 _st._tl_test_capture_probe = saved_probe
+
+
+    def _tl_test_capture_snapshot_contract(r):
+        """
+        _tl_capture_snapshot's return shape is exactly {"roots", "ctx",
+        "rollback_limit"} — no "blob", no "context" key (that belongs only to
+        the legacy pre-blob shape, which is read-only going forward). Pins the
+        data contract every consumer (_tl_unfreeze_from_snapshot, _valid_snap,
+        debug logging) must respect. ctx must match what Ren'Py's own
+        rollback_copy() guarantees (interacting forced False), and
+        rollback_limit matches the live log's value at capture time.
+        """
+        s = "capture_snapshot_contract"
+        import store as _st
+        import builtins as _tl_builtins
+
+        ## Ren'Py rebinds the bare name "dict" to RevertableDict inside store
+        ## scope (minstore.py), so isinstance(x, dict) here would check against
+        ## the wrong type. _tl_builtins.dict is the real Python builtin.
+
+        saved_probe = getattr(_st, "_tl_test_capture_probe", None)
+        try:
+            _st._tl_test_capture_probe = "contract_probe_value"
+            renpy.game.log.complete(True)
+
+            expected_rollback_limit = renpy.game.log.rollback_limit
+            snap = _tl_capture_snapshot()
+
+            r.check(s, "snap is a dict", isinstance(snap, _tl_builtins.dict))
+            r.check(s, "snap has exactly keys roots/ctx/rollback_limit",
+                    set(snap.keys()) == {"roots", "ctx", "rollback_limit"})
+
+            roots = snap.get("roots")
+            ctx   = snap.get("ctx")
+            r.check(s, "roots is a dict", isinstance(roots, _tl_builtins.dict))
+            r.check(s, "roots has probe",
+                    roots.get("store._tl_test_capture_probe") == "contract_probe_value")
+            r.check(s, "ctx has .current",   hasattr(ctx, "current"))
+            r.check(s, "ctx.interacting is False", ctx.interacting is False)
+            r.check(s, "rollback_limit matches live log at capture time",
+                    snap.get("rollback_limit") == expected_rollback_limit,
+                    "got {} expected {}".format(snap.get("rollback_limit"), expected_rollback_limit))
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            if saved_probe is None:
+                try:
+                    del _st._tl_test_capture_probe
+                except AttributeError:
+                    pass
+            else:
+                _st._tl_test_capture_probe = saved_probe
+
+
+    def _tl_test_capture_snapshot_reuses_unchanged_values(r):
+        """
+        Two captures back to back, with nothing changed in the store between
+        them except one probe var, must produce roots dicts where every
+        unchanged value is the exact same object reference in both — the
+        mechanism the whole cache redesign exists for (this is what lets
+        Ren'Py's own single combined save pickle dedupe the many near-constant
+        objects repeated across every cached menu snapshot). Only the var
+        that actually changes between the two captures should get its own
+        distinct frozen copy.
+        """
+        s = "capture_snapshot_reuses_unchanged_values"
+        import store as _st
+
+        saved_stable   = getattr(_st, "_tl_test_reuse_probe", None)
+        saved_changing = getattr(_st, "_tl_test_reuse_changing", None)
+        try:
+            _st._tl_test_reuse_probe    = {"stable": True}
+            _st._tl_test_reuse_changing = {"n": 1}
+            renpy.game.log.complete(True)
+
+            snap1 = _tl_capture_snapshot()
+            r.check(s, "snap1 has roots", "roots" in snap1)
+            if "roots" not in snap1:
+                return
+
+            _st._tl_test_reuse_changing["n"] = 2
+            renpy.game.log.complete(True)
+            snap2 = _tl_capture_snapshot()
+
+            key_stable   = "store._tl_test_reuse_probe"
+            key_changing = "store._tl_test_reuse_changing"
+            r.check(s, "unchanged value is the same object across captures",
+                    snap2["roots"].get(key_stable) is snap1["roots"].get(key_stable))
+            r.check(s, "changed value gets a distinct object",
+                    snap2["roots"].get(key_changing) is not snap1["roots"].get(key_changing))
+            r.check(s, "changed value has the new content",
+                    snap2["roots"].get(key_changing) == {"n": 2})
+            r.check(s, "first snapshot's changing value untouched by the second capture",
+                    snap1["roots"].get(key_changing) == {"n": 1})
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            if saved_stable is None:
+                try:
+                    del _st._tl_test_reuse_probe
+                except AttributeError:
+                    pass
+            else:
+                _st._tl_test_reuse_probe = saved_stable
+            if saved_changing is None:
+                try:
+                    del _st._tl_test_reuse_changing
+                except AttributeError:
+                    pass
+            else:
+                _st._tl_test_reuse_changing = saved_changing
+
+
+    def _tl_test_unfreeze_live_path(r):
+        """
+        _tl_unfreeze_from_snapshot, given a live-shaped snap ({"roots", "ctx",
+        "rollback_limit"}), builds the same single-entry RollbackLog contract as
+        the legacy path: 1 log entry, rollback_limit equal to the value stored
+        in the snap, checkpoint/hard_checkpoint True, stores={}, objects=[],
+        context.interacting False, label="_after_load".
+        Also proves roots handed to Ren'Py's real unfreeze() are fresh copies,
+        not aliases of the snap's own frozen roots dict (which the cache still
+        owns and may hand to a future unfreeze).
+        """
+        s = "unfreeze_live_path"
+
+        fake_ctx            = _TLFakeCtx()
+        fake_roots          = {"store.tl_probe": {"a": 1}}
+        fake_rollback_limit = 42
+        fake_snap           = {
+            "roots": fake_roots, "ctx": fake_ctx,
+            "rollback_limit": fake_rollback_limit,
+        }
+
+        with _TLMockedUnfreeze(r, s) as m:
+            if not m.call(_tl_unfreeze_from_snapshot, fake_snap):
+                return
+            try:
+                r.check(s, "unfreeze called once", len(m.captured) == 1)
+                if not m.captured:
+                    return
+
+                log_inst, roots_arg, label_arg = m.captured[0]
+                r.check(s, "label is _after_load",     label_arg == "_after_load")
+                r.check(s, "log has 1 entry",          len(log_inst.log) == 1)
+                r.check(s, "rollback_limit is the snap's value",
+                        log_inst.rollback_limit == fake_rollback_limit,
+                        "got {} expected {}".format(log_inst.rollback_limit, fake_rollback_limit))
+
+                if not log_inst.log:
+                    return
+                rb = log_inst.log[0]
+                r.check(s, "rb.checkpoint=True",        rb.checkpoint is True)
+                r.check(s, "rb.hard_checkpoint=True",   rb.hard_checkpoint is True)
+                r.check(s, "rb.stores={}",              rb.stores == {})
+                r.check(s, "rb.objects=[]",             rb.objects == [])
+                r.check(s, "rb.context is a copy, not the fake_ctx instance",
+                        rb.context is not fake_ctx)
+                r.check(s, "rb.context.current preserved",
+                        rb.context.current == fake_ctx.current)
+                r.check(s, "rb.context.interacting is False",
+                        getattr(rb.context, "interacting", "MISSING") is False)
+
+                r.check(s, "roots_arg is a dict",       isinstance(roots_arg, dict))
+                r.check(s, "roots_arg has the expected value",
+                        roots_arg.get("store.tl_probe") == {"a": 1})
+                r.check(s, "roots_arg is not the snap's own roots dict",
+                        roots_arg is not fake_roots)
+                r.check(s, "roots_arg['store.tl_probe'] is not the snap's own frozen object",
+                        roots_arg.get("store.tl_probe") is not fake_roots["store.tl_probe"])
+            except Exception as e:
+                r.check(s, "no exception", False, str(e))
+
+
+    def _tl_test_unfreeze_live_repeat_isolation(r):
+        """
+        Unfreezing the SAME cached live-shaped snap twice must yield
+        independent, uncorrupted roots each time — even though the cache's own
+        frozen roots dict is shared/reused across both calls, and even if the
+        caller mutates what the first call handed to Ren'Py's real unfreeze()
+        in place afterward (which is exactly what happens to store vars after
+        a real jump). This is the sharpest isolation test in the suite: the
+        whole redesign intentionally reintroduces shared references at the
+        cache level, so proving the *handoff* copy still isolates every
+        unfreeze is essential.
+        """
+        s = "unfreeze_live_repeat_isolation"
+
+        fake_ctx   = _TLFakeCtx()
+        fake_roots = {"store.tl_probe": {"a": 1}}
+        fake_snap  = {"roots": fake_roots, "ctx": fake_ctx, "rollback_limit": 42}
+
+        with _TLMockedUnfreeze(r, s) as m:
+            try:
+                for _ in range(2):
+                    if not m.call(_tl_unfreeze_from_snapshot, fake_snap):
+                        return
+
+                r.check(s, "unfreeze called twice", len(m.captured) == 2)
+                if len(m.captured) < 2:
+                    return
+
+                first_roots, second_roots = m.captured[0][1], m.captured[1][1]
+                r.check(s, "first and second roots are distinct objects",
+                        first_roots is not second_roots)
+
+                ## Simulate what a real jump does to store state: mutate in place.
+                first_roots["store.tl_probe"]["a"] = 999
+
+                r.check(s, "second decode unaffected by mutating the first",
+                        second_roots["store.tl_probe"]["a"] == 1)
+                r.check(s, "cache's own frozen roots (build-time input) still untouched",
+                        fake_roots["store.tl_probe"]["a"] == 1)
+            except Exception as e:
+                r.check(s, "no exception", False, str(e))
+
+
+    def _tl_test_unfreeze_legacy_direct(r):
+        """
+        _tl_unfreeze_legacy consumes the pre-blob {"roots": ..., "context": ...}
+        shape — the only legacy shape that ever shipped to players (the zdict
+        blob format never went to production, so it needs no read support).
+        Also proves capture is all-or-nothing on this path: a deepcopy failure
+        must abort the unfreeze entirely, never silently fall back to handing
+        Ren'Py the live/original reference — the exact bug fixed in commit
+        5327730 for the capture side; this closes the matching hole on read.
+        """
+        s = "unfreeze_legacy_direct"
+
+        fake_ctx    = _TLFakeCtx()
+        fake_ctx.interacting = False
+        shared_dict = {"a": 1}
+        fake_snap   = {"roots": {"store.tl_probe": shared_dict}, "context": fake_ctx}
+
+        with _TLMockedUnfreeze(r, s) as m:
+            if not m.call(_tl_unfreeze_legacy, fake_snap):
+                return
+            try:
+                r.check(s, "unfreeze called once", len(m.captured) == 1)
+                if not m.captured:
+                    return
+
+                log_inst, roots_arg, label_arg = m.captured[0]
+                expected_rollback_limit = getattr(renpy.config, "hard_rollback_limit", 1) or 1
+                r.check(s, "label is _after_load", label_arg == "_after_load")
+                r.check(s, "log has 1 entry",       len(log_inst.log) == 1)
+                r.check(s, "rollback_limit is legacy fallback",
+                        log_inst.rollback_limit == expected_rollback_limit,
+                        "got {} expected {}".format(log_inst.rollback_limit, expected_rollback_limit))
+
+                rb = log_inst.log[0]
+                r.check(s, "rb.checkpoint=True",       rb.checkpoint is True)
+                r.check(s, "rb.hard_checkpoint=True",  rb.hard_checkpoint is True)
+                r.check(s, "rb.stores={}",             rb.stores == {})
+                r.check(s, "rb.objects=[]",            rb.objects == [])
+                r.check(s, "rb.context is not fake_ctx (deepcopy)", rb.context is not fake_ctx)
+                r.check(s, "rb.context.interacting is False",
+                        getattr(rb.context, "interacting", "MISSING") is False)
+
+                r.check(s, "roots_arg is not the original dict",
+                        roots_arg is not fake_snap["roots"])
+                roots_arg["store.tl_probe"]["a"] = 999
+                r.check(s, "snap roots unaffected by post-unfreeze mutation",
+                        fake_snap["roots"]["store.tl_probe"]["a"] == 1)
+            except Exception as e:
+                r.check(s, "no exception", False, str(e))
+
+        ## deepcopy-fail-hard case: an object that cannot be deep-copied (a
+        ## threading.Lock, same as anything holding an OS resource) must abort
+        ## the whole unfreeze, never fall back to handing out the original
+        ## live reference. Fails before ever reaching RollbackLog.unfreeze,
+        ## so no mock is needed here.
+        import threading
+        uncopyable_snap = {"roots": {"store.tl_probe": threading.Lock()},
+                            "context": _TLFakeCtx()}
+        raised = False
+        try:
+            _tl_unfreeze_legacy(uncopyable_snap)
+        except Exception:
+            raised = True
+        r.check(s, "deepcopy failure aborts unfreeze instead of falling back to live reference",
+                raised)
+
+
+    def _tl_test_unfreeze_dispatch_routes_by_shape(r):
+        """
+        _tl_unfreeze_from_snapshot must route purely on shape: a "context" key
+        means the legacy pre-blob path (deepcopy-based), anything else is
+        routed to the live-reference path. Proves the two code paths don't
+        cross-contaminate.
+        """
+        s = "unfreeze_dispatch_routes_by_shape"
+
+        with _TLMockedUnfreeze(r, s) as m:
+            try:
+                live_snap = {
+                    "roots": {"k": "live_roots"}, "ctx": _TLFakeCtx(),
+                    "rollback_limit": 42,
+                }
+                if not m.call(
+                    _tl_unfreeze_from_snapshot, live_snap,
+                    check_label="live-shaped snap: no unexpected exception"
+                ):
+                    return
+
+                legacy_snap = {"roots": {"k": "legacy_roots"}, "context": _TLFakeCtx()}
+                if not m.call(
+                    _tl_unfreeze_from_snapshot, legacy_snap,
+                    check_label="legacy-shaped snap: no unexpected exception"
+                ):
+                    return
+
+                r.check(s, "unfreeze called for both shapes", len(m.captured) == 2)
+                if len(m.captured) < 2:
+                    return
+                r.check(s, "live shape decoded to its own roots", m.captured[0][1] == {"k": "live_roots"})
+                r.check(s, "legacy shape decoded to its own roots", m.captured[1][1] == {"k": "legacy_roots"})
+            except Exception as e:
+                r.check(s, "no exception", False, str(e))
+
+
+    def _tl_test_valid_snap_shapes(r):
+        """
+        _valid_snap must accept both the live shape (roots+ctx) and the legacy
+        pre-blob shape (roots+context), and reject anything else. The zdict
+        blob shape never shipped to players, so it is not a case here. Rigid
+        enumeration — every shape _tl_get_menu_snapshot/_tl_get_chapter_snapshot
+        could ever hand it must be covered here.
+        """
+        s = "valid_snap_shapes"
+        try:
+            r.check(s, "live shape with roots+ctx is valid",
+                    _valid_snap({"roots": {"a": 1}, "ctx": _TLFakeCtx(), "rollback_limit": 1}) is True)
+            r.check(s, "legacy shape with roots+context is valid",
+                    _valid_snap({"roots": {"a": 1}, "context": _TLFakeCtx()}) is True)
+            r.check(s, "legacy shape with context=None is invalid",
+                    not _valid_snap({"roots": {"a": 1}, "context": None}))
+            r.check(s, "live shape with empty roots is invalid",
+                    not _valid_snap({"roots": {}, "ctx": _TLFakeCtx(), "rollback_limit": 1}))
+            r.check(s, "legacy shape with empty roots is invalid",
+                    not _valid_snap({"roots": {}, "context": _TLFakeCtx()}))
+            r.check(s, "None snap is invalid", not _valid_snap(None))
+            r.check(s, "empty dict snap is invalid", not _valid_snap({}))
+            r.check(s, "dict with neither shape's keys is invalid",
+                    not _valid_snap({"foo": 1}))
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+
+
+    def _tl_test_snapshot_cache_mixed_shapes(r):
+        """
+        A cache holding both legacy-shaped and live-shaped entries at once
+        (the real state of the world mid-migration: old nodes captured before
+        the upgrade, new nodes captured after) must retrieve and unfreeze
+        each correctly through the same public path.
+        """
+        s = "snapshot_cache_mixed_shapes"
+
+        cache      = _tl_get_snapshot_cache()
+        saved_menu = dict(cache.menu)
+
+        legacy_idx = 900001
+        live_idx   = 900002
+
+        try:
+            cache.menu[legacy_idx] = {
+                "roots": {"k": "legacy_marker"}, "context": _TLFakeCtx()}
+            cache.menu[live_idx] = {
+                "roots": {"k": "live_marker"}, "ctx": _TLFakeCtx(), "rollback_limit": 1}
+
+            legacy_snap = _tl_get_menu_snapshot(legacy_idx)
+            live_snap   = _tl_get_menu_snapshot(live_idx)
+
+            r.check(s, "legacy snap retrieved", legacy_snap is not None)
+            r.check(s, "live snap retrieved",   live_snap is not None)
+            r.check(s, "legacy snap is valid",  _valid_snap(legacy_snap))
+            r.check(s, "live snap is valid",    _valid_snap(live_snap))
+
+            with _TLMockedUnfreeze(r, s) as m:
+                for snap in (legacy_snap, live_snap):
+                    if not m.call(_tl_unfreeze_from_snapshot, snap):
+                        return
+
+                r.check(s, "both entries unfrozen", len(m.captured) == 2)
+                if len(m.captured) == 2:
+                    r.check(s, "legacy entry decoded correctly",
+                            m.captured[0][1] == {"k": "legacy_marker"})
+                    r.check(s, "live entry decoded correctly",
+                            m.captured[1][1] == {"k": "live_marker"})
+
+        except Exception as e:
+            r.check(s, "no exception", False, str(e))
+        finally:
+            cache.menu.clear()
+            cache.menu.update(saved_menu)
 
 
     ## ── v2 tests ────────────────────────────────────────────────────────────
@@ -1422,7 +1908,7 @@ init python:
         saved_path       = persistent._tl_replay_path
         saved_recovery   = persistent._tl_recovery_slot
         saved_pending    = getattr(renpy.game, "_tl_pending_snap", None)
-        saved_chap_cache = _tl_get_snapshot_cache()["chapter"].copy()
+        saved_chap_cache = _tl_get_snapshot_cache().chapter.copy()
 
         ## Stage a fake snapshot for test_label so _tl_jump takes the snapshot
         ## path (sets pending_snap + returns) rather than the "no slot" cleanup
@@ -1441,7 +1927,7 @@ init python:
                 {"chapter_name": test_chapter, "end_label": test_label, "after_index": 1}
             ]
             _tl_chapters[test_chapter] = test_label
-            _tl_get_snapshot_cache()["chapter"][test_label] = fake_snap
+            _tl_get_snapshot_cache().chapter[test_label] = fake_snap
 
             _tl_jump(chapter_label=test_label)
 
@@ -1470,8 +1956,8 @@ init python:
             persistent._tl_replay_path   = saved_path
             persistent._tl_recovery_slot = saved_recovery
             renpy.game._tl_pending_snap  = saved_pending
-            _tl_get_snapshot_cache()["chapter"].clear()
-            _tl_get_snapshot_cache()["chapter"].update(saved_chap_cache)
+            _tl_get_snapshot_cache().chapter.clear()
+            _tl_get_snapshot_cache().chapter.update(saved_chap_cache)
             _tl_chapters.clear()
             _tl_chapters.update(saved_chapters)
 
@@ -1619,6 +2105,7 @@ init python:
         _tl_test_on_load(r)
         _tl_test_interact_callback_var_flush(r)
         _tl_test_log_truncation(r)
+        _tl_test_snapshot_cache_save_round_trip(r)
         _tl_test_pre_save_slot_format(r)
         _tl_test_jump_uses_pre_save(r)
         _tl_test_cache_not_in_get_roots(r)
@@ -1627,6 +2114,14 @@ init python:
         _tl_test_snapshot_ctx_isolation(r)
         _tl_test_snapshot_roots_isolation(r)
         _tl_test_snapshot_capture_isolation(r)
+        _tl_test_capture_snapshot_contract(r)
+        _tl_test_capture_snapshot_reuses_unchanged_values(r)
+        _tl_test_unfreeze_live_path(r)
+        _tl_test_unfreeze_live_repeat_isolation(r)
+        _tl_test_unfreeze_legacy_direct(r)
+        _tl_test_unfreeze_dispatch_routes_by_shape(r)
+        _tl_test_valid_snap_shapes(r)
+        _tl_test_snapshot_cache_mixed_shapes(r)
         _tl_test_jump_staging(r)
         _tl_test_jump_empty_shadow(r)
         _tl_test_cancel_jump(r)

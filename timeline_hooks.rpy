@@ -110,7 +110,7 @@ init -1 python:
                 snap = _tl_capture_snapshot()
                 _tl_log("TL snapshot: idx={} ctx={} roots_keys={}".format(
                     _tl_node_count,
-                    getattr(snap["context"], "current", "?"),
+                    getattr(snap["ctx"], "current", "?"),
                     len(snap["roots"])
                 ))
             except Exception as e:
@@ -455,7 +455,7 @@ init python:
                     chap_snap = _tl_capture_snapshot()
                     _tl_log("TL chapter snapshot: '{}' ctx={} roots_keys={}".format(
                         chapter,
-                        getattr(chap_snap["context"], "current", "?"),
+                        getattr(chap_snap["ctx"], "current", "?"),
                         len(chap_snap["roots"])
                     ))
                     _tl_cache_chapter_snapshot(label_name, chap_snap)
