@@ -7,6 +7,14 @@ that is present in the codebase but not yet committed.
 
 ## Unreleased
 
+### Fix: `NameError: name 'Sized' is not defined` crash in the packaged mod's test runner
+
+`timeline_tests_ren.py` crashed at line 1238, inside `_tl_test_cache_not_in_get_roots`. The cause: `from collections.abc import Sized` sat above the file's first `"""renpy` marker. In the `_ren.py` format, code above the first marker is parse-only. Ren'Py never runs it. So `Sized` stayed undefined at runtime.
+
+- **`timeline_tests_ren.py`** — moved the import to just after the `init python:` marker, the same spot every other real runtime import uses in this file family.
+- Scanned every `_ren.py` file for the same bug class. Found none.
+- The `tests/` pytest suite does not run this code path, so this bug surfaced only in a packaged build.
+
 ### Tooling: PEP 484 type comments added to all top-level functions across the mod's `.py` files
 
 Added a Python-2-safe (Ren'Py 7) `# type: (ParamType, ...) -> ReturnType` trailing comment to every module-level (`^def `) function across 16 files (136 functions total), so LSP hover, `findReferences`, and `goToDefinition` work without changing runtime behavior. Nested/closure functions and class methods were left untyped — they get no cross-file `findReferences` benefit. Every parameter got a real inferred type (never the `...` shorthand), cross-checked against `docs/DEV_NOTES.md`'s function tables and, where the docs table did not match the code, against the code directly.

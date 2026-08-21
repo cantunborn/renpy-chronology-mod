@@ -22,7 +22,6 @@
 ## =============================================================================
 
 from typing import TYPE_CHECKING
-from collections.abc import Sized
 
 if TYPE_CHECKING:
     import renpy  # type-check-only; injected into store namespace at runtime
@@ -64,6 +63,8 @@ screen _tl_test_runner():
 """renpy
 init python:
 """
+
+from collections.abc import Sized
 
 ## Registers the Shift+F9 hotkey and the always-on overlay screen that
 ## listens for it — both merged here since they're the same init priority
