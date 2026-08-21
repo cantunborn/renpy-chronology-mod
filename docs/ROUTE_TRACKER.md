@@ -12,7 +12,7 @@ The route tracker is a second tab in the timeline UI (key `R`) that shows which 
 
 ### 1. AST walk → persistent index
 
-`_tl_build_route_index(nodes)` is called at the end of `_tl_build_ast_map()` in `timeline_init.rpy`. It receives the list of all label nodes from `renpy.game.script.namemap`. It runs a full iterative block walk from all Label entry points (covering anonymous nodes inside If/Menu arms) using a work queue.
+`_tl_build_route_index(nodes)` is called at the end of `_tl_build_ast_map()` in `timeline_init_ren.py`. It receives the list of all label nodes from `renpy.game.script.namemap`. It runs a full iterative block walk from all Label entry points (covering anonymous nodes inside If/Menu arms) using a work queue.
 
 **Python-node pass** (during the walk):
 - Parses `.code.source` with the Python `ast` module
@@ -57,7 +57,7 @@ A var is *consumed* (`_tl_var_consumed(name)`) when `len(_tl_var_if_seen_keys[na
 
 ### 3. Var change detection
 
-`_tl_python_execute_patched` (in `backend/tl_route_logic.rpy`) wraps `renpy.ast.Python.execute`:
+`_tl_python_execute_patched` (in `backend/tl_route_logic_ren.py`) wraps `renpy.ast.Python.execute`:
 
 1. **Init guard**: bails immediately during `renpy.is_init_phase()`.
 2. **Filename filter**: `_tl_is_game_file(filename)` — skips Ren'Py internals and mod files.
@@ -108,11 +108,11 @@ A var is *consumed* (`_tl_var_consumed(name)`) when `len(_tl_var_if_seen_keys[na
 
 | File | Role |
 |------|------|
-| `backend/tl_route_logic.rpy` | AST index build, chip filtering/ordering, snapshot/diff/flush, notification format |
-| `backend/tl_ghost_logic.rpy` | `_tl_python_execute_patched` registration, `_tl_notify_branch` tier logic |
+| `backend/tl_route_logic_ren.py` | AST index build, chip filtering/ordering, snapshot/diff/flush, notification format |
+| `backend/tl_ghost_logic_ren.py` | `_tl_python_execute_patched` registration, `_tl_notify_branch` tier logic |
 | `ui/tl_route_screen.rpy` | `tl_route` chip bar screen, `_tl_notify` notification screen |
 | `timeline_screen.rpy` | `_tl_toggle` routing, route tab header button, tooltip rendering, `_tl_capture_hover_pos` |
-| `timeline_init.rpy` | Calls `_tl_build_route_index`, initializes route store defaults |
+| `timeline_init_ren.py` | Calls `_tl_build_route_index`, initializes route store defaults |
 
 ## Key layout variables (ui/tl_route_screen.rpy)
 

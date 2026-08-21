@@ -1,5 +1,5 @@
 """
-Tests for tl_shadow_path.rpy — shadow-path match and consume.
+Tests for tl_shadow_path_ren.py — shadow-path match and consume.
 
 v1 tests (TestBuildShadowPath, TestStageShadowPath, TestConsumeShadowPath) are
 skipped because the functions they test were removed or changed in v2.

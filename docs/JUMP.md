@@ -8,10 +8,10 @@ The jump feature lets players click any past choice in the timeline (or modal) a
 
 ## Main Files
 
-- `backend/tl_saveload.rpy` — `_tl_jump`, `_tl_cancel_jump`, `_find_slot`, `_tl_clear_replay_state`, slot-naming helpers
-- `backend/tl_snapshot_cache.rpy` — `TLSnapshotCache`, `_tl_capture_snapshot`, `_tl_unfreeze_from_snapshot`, snapshot cache singleton on `renpy.game.log`
-- `backend/tl_shadow_path.rpy` — `_tl_consume_shadow_path`, `_tl_shadow_match`
-- `timeline_hooks.rpy` — `_tl_store_wrapper` (replay interception + shadow consumption), `_tl_on_load` (shadow reconstruction from persistent)
+- `backend/tl_saveload_ren.py` — `_tl_jump`, `_tl_cancel_jump`, `_find_slot`, `_tl_clear_replay_state`, slot-naming helpers
+- `backend/tl_snapshot_cache_ren.py` — `TLSnapshotCache`, `_tl_capture_snapshot`, `_tl_unfreeze_from_snapshot`, snapshot cache singleton on `renpy.game.log`
+- `backend/tl_shadow_path_ren.py` — `_tl_consume_shadow_path`, `_tl_shadow_match`
+- `timeline_hooks_ren.py` — `_tl_store_wrapper` (replay interception + shadow consumption), `_tl_on_load` (shadow reconstruction from persistent)
 - `timeline_screen.rpy` — `_tl_do_load` label, `_tl_do_chap_end_jump` label
 - `ui/tl_modal.rpy` — action that initiates a menu jump (`Function(_tl_jump, node_index, option_index)`)
 - `timeline_screen.rpy` — `tl_chapter_divider` screen calls `Function(_tl_jump, chapter_label=end_label)`
@@ -47,15 +47,15 @@ _tl_jump(node_index, option_index)
 
 --- snapshot path ---
 label _tl_do_load
-    -> renpy.load(_tl_load_slot)  [but _tl_pending_snap is on renpy.game, survives load]
-        -> config.after_load_callbacks fires: _tl_on_load()
-            -> detects persistent._tl_synthetic_jump = True
-            -> _tl_unfreeze_from_snapshot(renpy.game._tl_pending_snap)
-                -> {"roots":..., "ctx":..., "rollback_limit":...} (current) -> deepcopy roots/ctx fresh (roots may share frozen references with other cached snapshots; the deepcopy on the way out means the live store never ends up aliased to cache-owned objects)
-                -> {"roots":..., "context":...} (legacy pre-blob) -> _tl_unfreeze_legacy() -> deepcopy roots/ctx, rollback_limit falls back to config.hard_rollback_limit
-                -> _tl_build_and_unfreeze(roots, ctx, ..., rollback_limit) builds synthetic RollbackLog
-                -> copies snapshot cache to new_log before unfreeze
-                -> calls unfreeze() — atomically teleports engine to capture point
+    -> _tl_unfreeze_from_snapshot(_snap)  [called directly — does NOT go through renpy.load();
+       config.after_load_callbacks still fires via new_log.unfreeze(roots, label="_after_load"),
+       the same "_after_load" mechanism renpy.load() itself uses (loadsave.py:826), so
+       _tl_on_load / _tl_heal_restarting_screens still run after a synthetic jump]
+        -> {"roots":..., "ctx":..., "rollback_limit":...} (current) -> roots deep-copied fresh (roots may share frozen references with other cached snapshots; the deepcopy on the way out means the live store never ends up aliased to cache-owned objects); ctx is a pickled bytes blob, unpickled via renpy.compat.pickle — unpickling always produces a fresh independent object graph, so no separate deepcopy is needed for ctx
+        -> {"roots":..., "context":...} (legacy pre-blob) -> _tl_unfreeze_legacy() -> deepcopy roots/ctx, rollback_limit falls back to config.hard_rollback_limit
+        -> _tl_build_and_unfreeze(roots, ctx, ..., rollback_limit) builds synthetic RollbackLog
+        -> copies snapshot cache to new_log before unfreeze
+        -> calls unfreeze() — atomically teleports engine to capture point
 
 --- disk fallback path ---
 label _tl_do_load
@@ -88,7 +88,9 @@ A **snapshot** is captured in `_tl_record_before` immediately before each menu f
 3. Patches `ctx.current` to an enclosing label name when needed so `RollbackLog.rollback()` stops correctly at the synthetic entry in compiled `.rpyc` files
 4. Records `renpy.game.log.get_roots()` — the full Python object graph needed for rollback
 5. Reads `renpy.game.log.rollback_limit` — the live log's rollback allowance at this exact point in time, i.e. what a real save made right here would carry
-6. Passes `get_roots()`'s result through `self._freeze_roots(live_roots)` and returns `{"roots": frozen_roots, "ctx": ctx, "rollback_limit": rollback_limit}`
+6. Passes `get_roots()`'s result through `self._freeze_roots(live_roots)`, pickles `ctx` to bytes via `renpy.compat.pickle.dumps` (the same wrapper `renpy/loadsave.py` itself uses), and returns `{"roots": frozen_roots, "ctx": ctx_blob, "rollback_limit": rollback_limit}`
+
+**Why ctx is pickled, not stored live:** `rollback_copy()` only shallow-copies `scene_lists` (`SceneLists.__init__` does `self.layers[i] = oldsl.layers[i][:]` — a new list, but the same `ScreenDisplayable`/`SceneListEntry` object references). A cached snapshot's `ctx` therefore aliased the *live* session's screen objects until the value was actually unfrozen. Because `TLSnapshotCache` deliberately keeps snapshots alive across multiple `unfreeze()` calls (unlike ordinary gameplay, where the whole rollback log — aliasing and all — is discarded at the one real load Ren'Py expects), each `unfreeze()`'s `before_restart()` (see below) could mark a screen `restarting=True` in a way that leaked into every other cached snapshot sharing that same live object, corrupting them for future jumps and for the save file itself. Pickling `ctx` at capture time snapshots the whole object graph *by value* instead of by reference — the same guarantee real Ren'Py saves already rely on (`loadsave.py:417` pickles the entire `renpy.game.log`, screens and all, on every save) — closing the hole uniformly instead of auditing `scene_lists`/`info`/`music`/`movie` individually.
 
 **Reference-sharing freeze (current design):** `_freeze_roots` is the core of the cache. For every key in the live roots, it compares the live value against the value frozen at the *previous* capture using `_tl_values_equal(a, b)` — a single generic comparator used uniformly regardless of value type (`a is b` fast path, else `pickle.dumps(a) == pickle.dumps(b)`; deliberately not type-specialized, since the design must not assume anything about which game vars do or don't mutate). If equal, the frozen roots dict reuses the *previous* frozen reference for that key (not the live object); if changed or new, it gets a fresh `copy.deepcopy`. The result: every mutable value is deep-copied exactly once, ever, and every snapshot that captures it unchanged shares that same frozen object by reference. Because unchanged values across dozens of cached menus now point at the *same* Python object, Ren'Py's own single combined save pickle dedupes them for free via its normal memo table when the whole `renpy.game.log` (cache included) is serialized in one `pickle.dump()` call — no manual compression needed. `self._last_roots` tracks the most recently frozen roots dict so the next capture has something to diff against; it starts `None`, so the very first capture ever made has nothing to compare against and deep-copies everything.
 
@@ -98,16 +100,18 @@ Snapshots are stored on `TLSnapshotCache.menu` / `.chapter` (both plain `builtin
 - `TLSnapshotCache.transfer_to(new_log)` (via `_tl_transfer_snapshot_cache`) copies the whole cache instance to the new log during `_tl_unfreeze_from_snapshot` before the unfreeze replaces the current log
 
 **Restoration**: `_tl_unfreeze_from_snapshot` dispatches on snap shape:
-- `{"roots": ..., "ctx": ..., "rollback_limit": ...}` (current live shape, written by every capture since the reference-sharing redesign): deep-copies `roots` and `ctx` fresh before use — necessary because `roots` may still be sharing frozen references with other entries still sitting in the cache; the live store must never end up aliased to a cache-owned object, or a later jump to a *different* cached node could observe mutations made by ordinary forward gameplay after this jump.
-- `{"roots": ..., "context": ...}` (legacy pre-blob format — still present inside saves made before the reference-sharing redesign, until each cached node is naturally re-captured by being revisited): routed to `_tl_unfreeze_legacy()`, which `copy.deepcopy`s both `roots` and `context` before use, for the same live-aliasing reason as above. Legacy snaps never captured a historical `rollback_limit`, so this path falls back to `renpy.config.hard_rollback_limit`. (An intermediate pickled-blob format — `{"blob": bytes}`, compressed with a shared zlib dictionary in one iteration — existed briefly during development but was never committed/released, so no read-compat path exists for it.)
+- `{"roots": ..., "ctx": ..., "rollback_limit": ...}` (current shape, written by every capture since ctx became a pickled blob): `roots` is deep-copied fresh before use — necessary because it may still be sharing frozen references with other entries still sitting in the cache; the live store must never end up aliased to a cache-owned object, or a later jump to a *different* cached node could observe mutations made by ordinary forward gameplay after this jump. `ctx` is unpickled via `renpy.compat.pickle.loads` — unpickling always constructs a brand-new object graph, so no separate deepcopy is needed for it.
+- `{"roots": ..., "context": ...}` (legacy pre-blob format — still present inside saves made before ctx became a pickled blob, until each cached node is naturally re-captured by being revisited): routed to `_tl_unfreeze_legacy()`, which `copy.deepcopy`s both `roots` and `context` before use, for the same live-aliasing reason as above. Legacy snaps never captured a historical `rollback_limit`, so this path falls back to `renpy.config.hard_rollback_limit`. (An intermediate pickled-blob format — `{"blob": bytes}`, compressed with a shared zlib dictionary in one iteration — existed briefly during development but was never committed/released, so no read-compat path exists for it.)
 
 Both paths converge on the shared `_tl_build_and_unfreeze(roots, ctx, log_prefix, rollback_limit)`, which forces `ctx.interacting = False`, builds the synthetic single-entry `RollbackLog`, sets `new_log.rollback_limit = rollback_limit`, copies the snapshot cache, and calls `unfreeze()` — atomically replacing the live game state with the captured state.
 
-**Verification note:** a real 68-menu save was inspected directly (raw `zipfile`/`pickle` read of the on-disk file, bypassing `renpy.load()`) to confirm the design holds up under actual gameplay: exactly one `TLSnapshotCache` instance, 872 distinct objects backing 32,120 snapshot-root references (97.3% reference-sharing), and — checked explicitly — no object shared across multiple cached snapshots ever carried different content at different appearances (which would indicate something mutated a supposedly-frozen value in place). `_tl_test_snapshot_cache_save_round_trip` in `timeline_tests.rpy` automates this same check via a real `renpy.save()` to a private slot followed by a raw read-back — deliberately never calling `renpy.load()`, which would replace the live store and jump execution mid-test-run.
+**Verification note:** a real 68-menu save was inspected directly (raw `zipfile`/`pickle` read of the on-disk file, bypassing `renpy.load()`) to confirm the design holds up under actual gameplay: exactly one `TLSnapshotCache` instance, 872 distinct objects backing 32,120 snapshot-root references (97.3% reference-sharing), and — checked explicitly — no object shared across multiple cached snapshots ever carried different content at different appearances (which would indicate something mutated a supposedly-frozen value in place). `_tl_test_snapshot_cache_save_round_trip` in `timeline_tests_ren.py` automates this same check via a real `renpy.save()` to a private slot followed by a raw read-back — deliberately never calling `renpy.load()`, which would replace the live store and jump execution mid-test-run.
 
 **Rollback allowance (`rollback_limit`)**: the synthetic log's `rollback_limit` is set to the value captured at snapshot time, not hardcoded. `RollbackLog.rollback()` (called from inside `unfreeze()`) decrements it by 1 while consuming the synthetic entry — the same cost a real `renpy.load()` pays against the save's own `rollback_limit`. Passing the historical value straight through therefore reproduces exactly what "made a save right before the menu, then loaded it" would look like, rather than resetting the player's rollback depth to near-zero.
 
 **Overlay screens after unfreeze**: `_tl_on_load` hides all `config.overlay_screens` when `persistent._tl_synthetic_jump` is True. Ren'Py's `before_restart()` (called inside `unfreeze()`) marks the current session's overlay `ScreenDisplayable` objects as `restarting=True`; these stale objects end up in the live `scene_lists` after rollback. `show_overlay_screens` finds them via `get_screen()` and skips recreation, leaving broken screens that drop all input. Hiding them forces fresh recreation.
+
+**Healing already-corrupted saves**: pickling `ctx` (above) prevents *new* corruption from being written into future snapshots/saves, but does nothing for saves already written before this fix, where a screen's live `restarting=True` state may already be baked into the pickled save data. `_tl_heal_restarting_screens()` (`timeline_save_hooks_ren.py`, registered on `config.after_load_callbacks` after `_tl_validate_on_load`) runs on *every* load — not just synthetic jumps — and clears `.restarting` on any currently-shown screen that carries it, calling `renpy.restart_interaction()` if anything was healed. It is intentionally not scoped to `_tl`-prefixed screens: the same bug affects any entry in `config.overlay_screens`/`always_shown_screens` (e.g. the base game's `quick_menu`), and healing an ordinary on-demand screen that happens to carry the flag is harmless — those get recreated unconditionally on next display regardless.
 
 ## Disk Save Fallback (Backward Compat)
 
@@ -180,10 +184,10 @@ After the recovery load, the game is back at the exact point where the player op
 
 | Task | File |
 |------|------|
-| Jump initiation, slot lookup, cancel | `backend/tl_saveload.rpy` |
-| Snapshot capture and restore | `backend/tl_snapshot_cache.rpy` |
-| Shadow path match and consume | `backend/tl_shadow_path.rpy` |
-| Replay interception, shadow consumption at menus | `timeline_hooks.rpy` — `_tl_store_wrapper` |
-| Shadow reconstruction after load | `timeline_hooks.rpy` — `_tl_on_load` |
+| Jump initiation, slot lookup, cancel | `backend/tl_saveload_ren.py` |
+| Snapshot capture and restore | `backend/tl_snapshot_cache_ren.py` |
+| Shadow path match and consume | `backend/tl_shadow_path_ren.py` |
+| Replay interception, shadow consumption at menus | `timeline_hooks_ren.py` — `_tl_store_wrapper` |
+| Shadow reconstruction after load | `timeline_hooks_ren.py` — `_tl_on_load` |
 | Jump label, load call | `timeline_screen.rpy` — `_tl_do_load` |
 | Option button action (trigger) | `ui/tl_modal.rpy`, `timeline_screen.rpy` — `tl_chapter_divider` |

@@ -15,11 +15,11 @@ echo "→ Building $ZIP_NAME"
 
 # ── Copy mod files ─────────────────────────────────────────────────────────────
 mkdir -p "$MOD_DIR"
-cp "$REPO_ROOT"/timeline_init.rpy \
-   "$REPO_ROOT"/timeline_hooks.rpy \
+cp "$REPO_ROOT"/timeline_init_ren.py \
+   "$REPO_ROOT"/timeline_hooks_ren.py \
    "$REPO_ROOT"/timeline_screen.rpy \
-   "$REPO_ROOT"/timeline_save_hooks.rpy \
-   "$REPO_ROOT"/timeline_tests.rpy \
+   "$REPO_ROOT"/timeline_save_hooks_ren.py \
+   "$REPO_ROOT"/timeline_tests_ren.py \
    "$MOD_DIR/"
 cp -r "$REPO_ROOT/fonts" "$MOD_DIR/fonts"
 cp -r "$REPO_ROOT/backend" "$MOD_DIR/backend"

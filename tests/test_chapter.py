@@ -1,5 +1,5 @@
 """
-Tests for tl_chapter.rpy — chapter dedup, marker existence, rollback, chapter-end slot.
+Tests for tl_chapter_ren.py — chapter dedup, marker existence, rollback, chapter-end slot.
 Run: pytest tests/test_chapter.py -v
 """
 import os, sys

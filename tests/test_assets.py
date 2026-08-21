@@ -1,5 +1,5 @@
 """
-Tests for tl_assets.rpy — node thumb, asset thumb display cache key, asset file resolution.
+Tests for tl_assets_ren.py — node thumb, asset thumb display cache key, asset file resolution.
 Run: pytest tests/test_assets.py -v
 """
 import sys, os

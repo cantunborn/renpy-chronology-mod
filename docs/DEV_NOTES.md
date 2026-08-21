@@ -10,7 +10,7 @@ All backend files run at `init -2 python:` — before the top-level hooks.
 
 ---
 
-### `backend/tl_ast_utils.rpy`
+### `backend/tl_ast_utils_ren.py`
 
 Shared AST utilities used by multiple backend files. Loads first (alphabetical sort guarantees `tl_ast_utils` < all other `tl_[c-z]*.rpy` files at `init -2`).
 
@@ -20,13 +20,13 @@ Shared AST utilities used by multiple backend files. Loads first (alphabetical s
 |----------|-----------|-------------|
 | `_tl_ast_literal_value` | `(node) → str or None` | Returns the string value of an AST literal node. Handles `Constant` (Py 3.8+), `Str`, `Num` (Py 2/3), and `True`/`False` `Name` nodes. Single canonical location for Python 2/3 literal compat — replaces scattered `isinstance(Constant/Str/Num)` chains in callers. |
 | `_tl_extract_compare_literals` | `(cond_str) → list[str]` | Parse a condition string and return all comparator literal values from `Compare` nodes. Works across all comparison operators. Returns `[]` on parse error or if no `Compare` nodes found. |
-| `_tl_walk_ast_blocks` | `(nodes, visitor_fn, initial_state=None) → None` | Walk all `Label` node blocks from game scripts, calling `visitor_fn(node, state) → new_state` once per unique visited node. State is threaded sequentially through each block; child blocks (If entries, Menu option blocks) inherit the state at the branch point — mutations inside a branch do not affect the parent flow. Stateless visitors pass `return state` unchanged. Filters to game scripts only (excludes `renpy/` internals and mod files). Recurses into `If.entries` and `Menu.items` blocks. Uses an object-id visited set to prevent cycles. |
+| `_tl_walk_ast_blocks` | `(nodes, visitor_fn, initial_state=None) → None` | Walk all `Label` node blocks from game scripts, calling `visitor_fn(node, state, current_label) → new_state` once per unique visited node. State is threaded sequentially through each block; child blocks (If entries, Menu option blocks) inherit the state at the branch point — mutations inside a branch do not affect the parent flow. Stateless visitors pass `return state` unchanged. Filters to game scripts only (excludes `renpy/` internals and mod files). Recurses into `If.entries` and `Menu.items` blocks. Uses an object-id visited set to prevent cycles. |
 | `_tl_strip_renpy_tags` | `(s) → str` | Strips `{tag}` markup from a string, leaving inner text. Used by ghost logic and route tracker for display-safe var values and condition labels. |
 | `_tl_prettify_var` | `(name) → str` | Converts a snake_case variable name to a readable label. Strips common prefixes (`mc_`, `flag_`, `is_`, `has_`, `ch_`), splits on `_`, and title-cases each word. Example: `mc_affection_bonus` → `Affection Bonus`. |
 
 ---
 
-### `backend/tl_snapshot_cache.rpy`
+### `backend/tl_snapshot_cache_ren.py`
 
 Snapshot capture, cache management, and restore. All cache and snap dicts are plain `builtins.dict` (not `RevertableDict`) so RenPy's rollback system cannot revert them.
 
@@ -56,7 +56,7 @@ The cache is a **reference-sharing / persistent-data-structure** design: it owns
 
 ---
 
-### `backend/tl_saveload.rpy`
+### `backend/tl_saveload_ren.py`
 
 Jump control: snapshot-primary, disk saves as backward-compat fallback. The only disk write is the recovery save.
 
@@ -89,7 +89,7 @@ Jump control: snapshot-primary, disk saves as backward-compat fallback. The only
 
 ---
 
-### `backend/tl_assets.rpy`
+### `backend/tl_assets_ren.py`
 
 Asset/thumbnail resolution, image caching, and displayable creation.
 
@@ -137,9 +137,9 @@ Asset/thumbnail resolution, image caching, and displayable creation.
 
 ---
 
-### `backend/tl_ghost_logic.rpy`
+### `backend/tl_ghost_logic_ren.py`
 
-Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` to track branch conditions at runtime. Route var change detection (`Python.execute` patch) lives in `tl_route_logic.rpy`.
+Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` to track branch conditions at runtime. Route var change detection (`Python.execute` patch) lives in `tl_route_logic_ren.py`.
 
 **Store variables (transient):**
 - `_tl_ghost_nodes` — list of slim ghost cluster dicts; each has only 4 runtime fields: `ast_key`, `taken_index`, `branch_imgs`, `cluster_with_prev`
@@ -161,29 +161,26 @@ Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` to track branch cond
 |----------|-----------|-------------|
 | `_tl_ghost_ast` | `(ast_key) → dict` | Returns `persistent._tl_ghost_node_cache[str(ast_key)]` or `{}`. All UI read sites use `_tl_ghost_ast(key).get(field) or ghost.get(field)` for backward compat with old saves. |
 | `_tl_make_seen_fn_cached` | `(block) → tuple` | Cached wrapper for `_tl_make_seen_fn`; keyed by `id(block)`. Returns cached descriptor on hit; builds and stores on miss. |
-| `_tl_branch_img` | `(block, context_img=None) → str or None` | Resolves the best thumbnail image for a ghost branch using 3-tier search: local Scene/Show, Jump/Call follow, context fallback. |
-| `_tl_first_scene_img` | `(block) → str or None` | Shim calling `_tl_branch_img(block, context_img=None)`. |
-| `_collect_branch_imgs` | `(block, max_images=5) → (list, set)` | Collects up to max_images Scene/Show images from a branch block with flat scan and one Jump/Call hop; returns `(images, visited_labels)`. |
+| `_collect_branch_imgs` | `(block, max_images=5) → (list, set)` | Collects up to max_images Scene/Show images from a branch block with flat scan and one Jump/Call hop; returns `(images, visited_labels)`. Called cluster-wide from `_tl_emit_ghost_cluster` — `_tl_build_ghost_payload` leaves `branch_imgs` empty and defers to this call. |
 | `_tl_parse_regions` | `(cond_str) → list or None` | Parses a condition string to DNF regions for mutual exclusivity checks. |
 | `_tl_should_cluster` | `(prev_ghost, new_conds) → bool` | Returns True if new_conds are mutually exclusive with prev_ghost's conditions (safe to group visually). |
 | `_tl_branch_exits_before_next` | `(block) → bool` | Returns True when a taken branch clearly exits before sibling ifs can run (explicit Jump/Return). |
 | `_tl_extend_ghost_rows` | `(ghost, ast_key, conditions, seen_fns, branch_imgs, regions, affecting_vars=None) → None` | Appends hidden sibling-if rows into an existing ghost card dict. |
 | `_tl_extract_vars_from_conditions` | `(conditions) → set` | Extracts variable names from a list of condition strings via `ast.parse`. Walks `ast.Name` nodes; filters out `_TL_KW_SKIP` builtins and names starting with uppercase. Handles bare truthy checks, camelCase names, boolean ops, comparisons, and `not` correctly. Used to populate `affecting_vars` in ghost payloads and to build the route index. |
-| `_tl_prettify_condition` | `(cond) → str` | Prettifies snake_case var names and strips quotes from string values using `ast.parse`. `Name` nodes → `_tl_prettify_var` (defined in `tl_ast_utils.rpy`); `Constant` string nodes → bare value (no quotes); numeric constants left as-is. Applies replacements right-to-left by `col_offset`. Falls back to regex on parse failure. Example: `route_id == "romance"` → `Route Id == romance`. |
-| `_tl_get_taken_branch` | `(if_node) → int` | Evaluates conditions in order and returns the index of the first True one. |
+| `_tl_prettify_condition` | `(cond) → str` | Prettifies snake_case var names and strips quotes from string values using `ast.parse`. `Name` nodes → `_tl_prettify_var` (defined in `tl_ast_utils_ren.py`); `Constant` string nodes → bare value (no quotes); numeric constants left as-is. Applies replacements right-to-left by `col_offset`. Falls back to regex on parse failure. Example: `route_id == "romance"` → `Route Id == romance`. |
+| `_tl_get_taken_branch` | `(if_node) → int or None` | Evaluates conditions in order and returns the index of the first True one. Returns None if no condition matches or evaluation raises. |
 | `_tl_build_ghost_payload` | `(if_node, taken_index, context_img=None) → dict or None` | Builds one ghost payload dict for a single If node with conditions, seen_fns, branch_imgs. Returns None when all entries collapse to a single `"True"` condition (no branching content). |
 | `_tl_collect_if_run` | `(start_if_node) → list` | Collects a sequential run of player-relevant sibling If nodes with payload building. |
 | `_tl_partition_if_run` | `(run) → list` | Partitions a sequential If run into mutually-exclusive cluster groups. |
 | `_tl_emit_ghost_cluster` | `(group, cluster_with_prev) → None` | Emits one ghost cluster: writes AST-derived fields to `persistent._tl_ghost_node_cache` (with invalidation check), then appends a slim dict with only the 4 runtime fields to `store._tl_ghost_nodes`. |
 | `_tl_on_if_execute` | `(if_node, taken_index, pre_taken_seen=None) → None` | Callback after If.execute; orchestrates ghost synthesis, visited-node marking, and branch notification via `_tl_notify_branch`. |
-| `_tl_should_track_if_node` | `(if_node) → bool` | Returns True if the If node is from a game script: filename is non-empty, does not start with `renpy/` (RenPy internals), does not contain `renpy-chronology-mod`, and is not a `timeline_*.rpy` mod file. |
-| `_tl_if_execute_patched` | `(self) → None` | Replacement for `renpy.ast.If.execute`; bails out immediately during `renpy.is_init_phase()` or for non-game-script files, then evaluates taken branch descriptor **before** executing (pre-execute snapshot) and calls `_tl_on_if_execute`. |
+| `_tl_if_execute_patched` | `(self) → None` | Replacement for `renpy.ast.If.execute`; bails out immediately during `renpy.is_init_phase()` or when `_tl_is_game_file` (shared util, `tl_ast_utils_ren.py`) rejects the node's filename, then evaluates taken branch descriptor **before** executing (pre-execute snapshot) and calls `_tl_on_if_execute`. |
 | `_tl_notify_branch` | `(run, taken_index, pre_taken_seen=None) → None` | Three-tier branch notification: suppress (all branches seen), icon-only `⎇` (taken seen, ≥1 alternative unseen), or "New path" (taken branch itself was never taken before). Uses index-based comparison so equal tuples from different branches are correctly distinguished. |
 | `_tl_on_screen_navigate` | `(name) → None` | Registered on `config.statement_callbacks`. Clears `_tl_ghost_nodes` and `_tl_skip_ghost_ifs` before any `call screen` or `show screen` statement when a branch session is active and not replaying/skipping. Covers sandbox games that navigate via either statement form (IC uses `call screen`, PhotoHunt uses `show screen`). `renpy.show_screen()` from Python does not fire this callback. |
 
 ---
 
-### `backend/tl_route_logic.rpy`
+### `backend/tl_route_logic_ren.py`
 
 Route tracker backend: AST index build, chip filtering/ordering, var change detection (`Python.execute` patch), and notification formatting. Runs at `init -2`.
 
@@ -213,14 +210,16 @@ Route tracker backend: AST index build, chip filtering/ordering, var change dete
 | `_tl_build_route_index` | `(nodes) → None` | Orchestrator: calls the three phase functions above, then writes all persistent keys (`_tl_route_var_names`, `_tl_var_defaults`, `_tl_var_if_count`, `_tl_if_key_to_vars`, `_tl_var_domain`, `_tl_var_is_numeric`). |
 | `_tl_var_consumed` | `(var_name) → bool` | True if `len(_tl_var_if_seen_keys[var]) >= _tl_var_if_count[var]` — every If-entry referencing this var has been visited this session. Returns False when `if_count == 0`. |
 | `_tl_build_route_chips` | `() → list[(str, Any)]` | Filter and sort route vars for chip bar display. Hides vars with None values, non-scalar values, and vars still at their declared default (from `persistent._tl_var_defaults`) unless ghost-highlighted or recently-changed. Also includes highlighted vars present in `persistent._tl_var_defaults` but absent from `persistent._tl_route_var_names` (declared via `default`, only read in conditions, never `$`-assigned). Sorts highlighted (ghost/recently-changed) vars first by `if_count` desc, then remaining by `if_count` desc. |
-| `_tl_python_execute_patched` | `(self) → None` | Replacement for `renpy.ast.Python.execute`. Bails out immediately during `renpy.is_init_phase()`. Filename-filtered (game scripts only). Uses `self.code.bytecode.co_names` intersected with a frozenset of route var names (cached in a function-level mutable default arg keyed by identity of `persistent._tl_route_var_names` — not a store var, immune to rollback) to find vars this block might touch (~0–5); skips entirely if intersection is empty or block is hide-mode. Snapshots only the intersected vars, executes, then diffs: updates `_tl_recently_changed_vars` always (tinting); builds `_tl_pending_var_changes` and calls `_tl_flush_var_changes` only when `_tl_var_notifs_enabled` is True and old value was non-None. |
+| `_tl_python_execute_patched` | `(self) → None` | Replacement for `renpy.ast.Python.execute`. A thin dispatcher: calls `_tl_py_pre_var_snap(self)` before the original execute, then `_tl_py_post_var_diff(snap)` after. |
+| `_tl_py_pre_var_snap` | `(node) → dict or None` | Bails out immediately during `renpy.is_init_phase()` or for non-game-script files. Intersects `self.code.bytecode.co_names` with a frozenset of route var names (cached in a function-level mutable default arg keyed by identity of `persistent._tl_route_var_names` — not a store var, immune to rollback) to find vars this block might touch (~0–5); returns None if intersection is empty or block is hide-mode; otherwise snapshots those vars' current values. |
+| `_tl_py_post_var_diff` | `(snap) → None` | No-op if `snap` is None. Diffs the snapshot against current values: updates `_tl_recently_changed_vars` always (tinting); builds `_tl_pending_var_changes` and calls `_tl_flush_var_changes` only when `_tl_var_notifs_enabled` is True and old value was non-None. |
 | `_tl_format_numeric_change` | `(label, old_val, new_val) → str` | Returns `"↑N Label"` or `"↓N Label"`. Omits magnitude when delta is exactly 1. Strips `.0` from integer deltas. Uses DejaVuSans font tags for arrow glyphs. |
 | `_tl_flush_var_changes` | `() → None` | Emits one `renpy.show_screen("_tl_notify", message=...)` for all pending changes, then clears `store._tl_pending_var_changes`. No-op if nothing pending. Multiple changes joined with ` · `. |
 | `_tl_flush_menu_snap` | `() → None` | Handles vars that were `None` at menu-present time but now have a value (first assignment inside menu arm). Non-init vars (old was non-None) are skipped — already handled by the Python.execute patch. Adds emitted vars to `_tl_recently_changed_vars`. Clears `store._tl_menu_var_snap`. |
 
 ---
 
-### `backend/tl_seen_check.rpy`
+### `backend/tl_seen_check_ren.py`
 
 Seen-state tracking using descriptor tuples, evaluation against live RenPy state, and per-option seen checks.
 
@@ -254,7 +253,7 @@ Seen-state tracking using descriptor tuples, evaluation against live RenPy state
 
 ---
 
-### `backend/tl_shadow_path.rpy`
+### `backend/tl_shadow_path_ren.py`
 
 Shadow path: the replay-aid hint chain built from history after a jump target.
 
@@ -269,7 +268,7 @@ Shadow entries use `ast_key` — the same `(filename, linenumber)` tuple as `_tl
 
 ---
 
-### `backend/tl_chapter.rpy`
+### `backend/tl_chapter_ren.py`
 
 Chapter metadata loading, deduplication, marker tracking, and timeline rollback.
 
@@ -287,7 +286,7 @@ Chapter metadata loading, deduplication, marker tracking, and timeline rollback.
 
 ---
 
-### `backend/tl_menu_location.rpy`
+### `backend/tl_menu_location_ren.py`
 
 Stable menu site identity keys used to match history nodes across save/load.
 
@@ -296,15 +295,15 @@ Stable menu site identity keys used to match history nodes across save/load.
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `_tl_normalize_script_path` | `(path) → str` | Normalizes script paths so runtime and dumped AST paths can be compared (adds `game/` prefix if missing, strips `.rpyc`). |
-| `_tl_menu_site_key` | `(file_path, line_no) → str` | Builds a normalized `"{file}:{line}"` menu site identity key. |
+| `_tl_menu_site_key` | `(file_path, line_no) → tuple or None` | Builds a normalized `(file, line)` menu site identity key. |
 | `_tl_location_menu_ast_key` | `(location) → tuple or None` | Resolves a runtime `_location` tuple to the real Menu `(file, line)` key by walking the live AST namemap. |
-| `_tl_location_menu_site_key` | `(location) → str or None` | Returns the normalized menu-site key from a runtime `_location` tuple. |
-| `_tl_node_menu_site_key` | `(node) → str or None` | Best-effort stable menu-site identity for a history node; uses `ast_key` first, `_location` as fallback. |
+| `_tl_location_menu_site_key` | `(location) → tuple or None` | Returns the normalized menu-site key from a runtime `_location` tuple. |
+| `_tl_node_menu_site_key` | `(node) → tuple or None` | Best-effort stable menu-site identity for a history node; uses `ast_key` first, `_location` as fallback. |
 | `_tl_live_menu_lookup` | `() → dict` | Returns a lazy `(file, line) → live Menu node` map from RenPy namemap; result cached in runtime store. |
 
 ---
 
-### `backend/tl_menu_options.rpy`
+### `backend/tl_menu_options_ren.py`
 
 Choice menu entry filtering, indexing, and choice-return population.
 
@@ -319,7 +318,7 @@ Choice menu entry filtering, indexing, and choice-return population.
 
 ---
 
-### `backend/tl_ast_dump.rpy`
+### `backend/tl_ast_dump_ren.py`
 
 Development-time tool: walks the live RenPy AST and writes structured JSON for offline analysis tools.
 
@@ -337,7 +336,7 @@ Internal helpers defined inside `_tl_cfg_dump_ast` (not part of public API): `_i
 
 ---
 
-### `timeline_hooks.rpy`
+### `timeline_hooks_ren.py`
 
 Menu interception, save callbacks, replay wrapper, and ghost card hook. Runs at `init -1`.
 
@@ -347,7 +346,7 @@ Menu interception, save callbacks, replay wrapper, and ghost card hook. Runs at 
 - `_tl_context` — list of `(prompt, chosen_index)` tuples
 
 **Store variables (transient):**
-- `_tl_ghost_nodes` — ghost card list (see `backend/tl_ghost_logic.rpy`)
+- `_tl_ghost_nodes` — ghost card list (see `backend/tl_ghost_logic_ren.py`)
 - `_tl_ghost_highlight` — highlighted ghost row `(ast_key, branch_idx)` or None
 - `_tl_skip_ghost_ifs` — set of ast_keys to skip during ghost lookahead
 - `_tl_shadow_path` — list of `{index, chosen_index, ast_key}` shadow entries or None
@@ -377,7 +376,7 @@ Menu interception, save callbacks, replay wrapper, and ghost card hook. Runs at 
 
 ---
 
-### `timeline_init.rpy`
+### `timeline_init_ren.py`
 
 Store/persistent initialization, constants, logging, AST map build, and utility functions. Runs at `init -2`.
 
@@ -421,7 +420,7 @@ Store/persistent initialization, constants, logging, AST map build, and utility 
 
 ---
 
-### `timeline_save_hooks.rpy`
+### `timeline_save_hooks_ren.py`
 
 Post-load validation and save compatibility. Runs at `init -1`.
 
@@ -430,6 +429,7 @@ Post-load validation and save compatibility. Runs at `init -1`.
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `_tl_validate_on_load` | `() → None` | Registered `after_load_callback`; resets `_tl_history` if wrong type; drops malformed nodes; re-indexes; migrates pre-v1.1 `chapter_start` tags to `_tl_chapter_markers`; validates `_tl_shadow_path`; clears transient UI state (`_tl_modal_node`, `_tl_chap_end_slot`, `_tl_ghost_nodes`). |
+| `_tl_heal_restarting_screens` | `() → None` | Also registered `after_load_callback`; loops `renpy.config.layers` and `renpy.get_showing_tags(layer)`, resets any stuck `restarting` flag on a shown screen, and calls `renpy.restart_interaction()`. |
 
 **Compatibility cases handled:**
 - Mod installed on existing save → graceful empty state, recording starts from installation point
@@ -490,7 +490,7 @@ Design tokens, color contrast helpers, styles, and hover gradient generation.
 - `footer_bg = "#00000055"`, `footer_text = "#9a9183"`, `btn_bg = "#ffffff14"`, `btn_hover_bg = "#ffffff28"`, `hover_bg` — accent at 30%, `btn_text = "#c8c0b4"`
 - `modal_bg = "#1a1814ee"`, `modal_header = "#f0ece4"`
 
-**Font size constants** (also defined in `timeline_init.rpy` for backend use):
+**Font size constants** (also defined in `timeline_init_ren.py` for backend use):
 - `TL_SIZE_BODY = 21`, `TL_SIZE_TITLE = 38`, `TL_SIZE_DOT = 14`, `TL_SIZE_BADGE = 12`, `TL_SIZE_HEADER = 28`, `TL_SIZE_SUBTITLE = 17`
 
 **Font paths and FontGroups:**
@@ -541,7 +541,7 @@ Past and current choice card screens.
 
 ### `ui/tl_ghost_cards.rpy`
 
-Ghost branch card screens. Synthesis logic lives in `backend/tl_ghost_logic.rpy`.
+Ghost branch card screens. Synthesis logic lives in `backend/tl_ghost_logic_ren.py`.
 
 **Screens:**
 
@@ -612,19 +612,20 @@ RenPy stub, `.rpy` loader, and shared production namespace for all test files.
 - **RenPy stub**: mock `renpy`, `store`, `persistent` modules with minimal AST node classes; includes `show_screen`, `seen_image`, translator stub, and `renpy.ast` module stub
 - **`.rpy` loader**: `load_rpy(rel_path, ns)` extracts and executes all `init [priority] python:` blocks from a `.rpy` file; requires trailing newline on last block line
 - **Shared namespace (`_rpy_ns`)**: loads backend files in this order:
-  1. `backend/tl_ast_utils.rpy`
-  2. `backend/tl_chapter.rpy`
-  3. `backend/tl_menu_location.rpy`
-  4. `backend/tl_menu_options.rpy`
-  5. `backend/tl_shadow_path.rpy`
-  6. `backend/tl_seen_check.rpy`
-  7. `backend/tl_saveload.rpy`
-  8. `backend/tl_assets.rpy`
-  9. `backend/tl_ghost_logic.rpy`
-  10. `backend/tl_route_logic.rpy`
-  11. `backend/tl_coverage.rpy`
-  12. `timeline_init.rpy`
-  13. `timeline_hooks.rpy`
+  1. `backend/tl_ast_utils_ren.py`
+  2. `backend/tl_chapter_ren.py`
+  3. `backend/tl_menu_location_ren.py`
+  4. `backend/tl_menu_options_ren.py`
+  5. `backend/tl_shadow_path_ren.py`
+  6. `backend/tl_seen_check_ren.py`
+  7. `backend/tl_saveload_ren.py`
+  8. `backend/tl_assets_ren.py`
+  9. `backend/tl_ghost_logic_ren.py`
+  10. `backend/tl_route_logic_ren.py`
+  11. `backend/tl_coverage_ren.py`
+  12. `backend/tl_snapshot_cache_ren.py`
+  13. `timeline_init_ren.py`
+  14. `timeline_hooks_ren.py`
 
 **Test helpers exported to tests:**
 - `_tl_validate_history(history)` — cleans malformed history nodes
@@ -645,13 +646,11 @@ RenPy stub, `.rpy` loader, and shared production namespace for all test files.
 |-------|-------|--------|
 | `TestSaveSlot` | 8 | Slot format `_ch_{NNNN}_{hash6}`, zero-padding, determinism, context/index sensitivity, empty context, large index |
 | `TestValidateHistory` | 9 | Valid history unchanged, drops non-dict/missing-key/invalid-options entries, reindexes after drop, non-list input returns `[]`, empty options list |
-| `TestTwoPhaseSlotConsistency` | 3 | Early and refresh writes produce same slot; refresh does not use next choice |
-| `TestPreSaveSlot` | 11 | Format, padding, hash length, determinism, context/index sensitivity, ast_key disambiguation |
+| `TestTwoPhaseSlotConsistency` | 3 | Early and refresh writes produce same slot; refresh does not use next choice; consistency across multiple nodes |
+| `TestPreSaveSlot` | 12 | Format, padding, hash length, determinism, context/index sensitivity, menu0 empty-context constant, context truncated to current index, ast_key disambiguation |
 | `TestFindPreSave` | 9 | LT1 extension, plain extension, wrong hash, wrong index, slot-not-path, ast_key match/mismatch |
 | `TestSalvageAstKeys` | 4 | Stale node rematched, valid node skipped, no candidate unmatched, restamp clears img_name |
 | `TestFindSlot` | 8 | Tier 1 exact pre-save, Tier 2 pre-save walk, Tier 2 checkpoint, closest-wins priority, chapter-end marker, `_ch_start` fallback, no saves returns None |
-| `TestTwoPhaseSlotConsistency` | 3 | Same slot before/after next node, refresh uses only context up to current node, consistency across multiple nodes |
-| `TestFindNearestSaveDensePattern` | 2 | Dense+sparse save pattern; target between milestones finds nearest lower save |
 
 ---
 
@@ -672,68 +671,82 @@ RenPy stub, `.rpy` loader, and shared production namespace for all test files.
 
 ### `tests/test_shadow_path.py`
 
-**What it tests:** Shadow path building, staging, matching, and consumption.
+**What it tests:** Shadow path matching and consumption.
 
 **Run:** `pytest tests/test_shadow_path.py -v`
 
 | Class | Tests | Covers |
 |-------|-------|--------|
-| `TestBuildShadowPath` | 9 | Nodes after target only, target excluded, skips None location/chosen_index, empty tail, invalid index, order preserved, `menu_site_key` derived from `ast_key` |
-| `TestStageShadowPath` | 2 | Returns None when empty, preserves `menu_site_key` payload |
-| `TestShadowMatch` | 8 | Match at index 0 and mid-path, no match, empty path, first match wins on duplicates, chosen_index zero valid, `ast_key` match preferred over `_location`, site key match without location |
-| `TestConsumeShadowPath` | 11 | No match unchanged, first/middle/last entry consumed, no divergence on same choice, divergence on different choice, empty/None path, tail preserved, `menu_site_key` preferred |
+| `TestShadowMatch` | 8 | Match at index 0 and mid-path, no match, empty path, first match wins on duplicates, chosen_index zero valid, `ast_key` match preferred over `_location` (list and tuple backward-compat forms) |
+| `TestConsumeShadowPathV2` | 13 | No match unchanged, first/middle/last entry consumed, no divergence on same choice, divergence on different choice, match mode is `ast_key`/None, tail preserved in order, empty/None path unchanged, `ast_key` backward-compat (list and tuple forms), chosen_index zero same choice no divergence |
 
 ---
 
 ### `tests/test_seen_check.py`
 
-**What it tests:** New-content detection, seen-function descriptor evaluation, translator lookup, jump follow, Show exclusion, and say_range descriptor.
+**What it tests:** New-content detection, seen-descriptor construction, seen-function descriptor evaluation, translator lookup, jump follow, scene-seen-name lookup, Show exclusion, say_range descriptor, and menu-option seen state.
 
 **Run:** `pytest tests/test_seen_check.py -v`
 
 | Class | Tests | Covers |
 |-------|-------|--------|
-| `TestNodeHasNew` | 11 | All seen → False, none seen → True, partial → True, single option seen/unseen, empty options, chosen option skipped even if unseen, unchosen unseen triggers dot, no chosen_index checks all |
-| `TestEvalSeenFn` | 7 | `("never",)` → False, `("say", key)` checks `_seen_ever`, key not in `_seen_ever` → False, None `_seen_ever` → False, `("label", name)` checks `renpy.seen_label`, label unseen, no fn |
-| `TestSaySeenName` | 4 | Translator resolves to TranslateSay name; translator returns None → fallback to node.name; no identifier → node.name; lookup raises → node.name |
-| `TestFollowJumpSeenName` | 4 | Jump to Say → returns say name; non-Say prefix nodes skipped; no Say before Menu/Return → None; unknown target → None |
-| `TestMakeSeenFnExtended` | 7 | Show nodes excluded; multiple Says → say_range; Scene then Say → say descriptor; Scene alone → image descriptor; block ending in Jump with no Say uses jump follow |
-| `TestEvalSeenFnSayRange` | 4 | say_range: first not in seen → False; first in seen, last not → False; both in seen → True; fast-fail path verified |
+| `TestNodeHasNew` | 10 | All seen → False, none seen → True, partial → True, single option seen/unseen, empty options, chosen option skipped even if unseen, unchosen unseen triggers dot, no chosen_index checks all |
+| `TestEvalSeenFn` | 9 | `("never",)` → False, `("say", key)` checks `_seen_ever` for string and tuple keys, key not in `_seen_ever` → False, None `_seen_ever` → False, `("label", name)` checks `renpy.seen_label`, label unseen, no fn |
+| `TestMakeSeenFn` | 10 | Empty block → never; named Say → say descriptor; narrator Say with no name skipped, next Say used; Jump/Call → label descriptor; Return → never; Python node skipped, Say in block used; Return before Say → never; Scene then Say → say descriptor; Scene alone → image descriptor |
+| `TestSaySeenName` | 6 | No identifier → node.name; new-Ren'Py identifier (Say and TranslateSay) → identifier; old-Ren'Py identifier with no translator entry → node.name; old-Ren'Py identifier with translator entry (Say and TranslateSay) → translated name |
+| `TestFollowJumpSeenName` | 5 | Unknown target → None; label with Say → say name; label with Python then Say → say name; label with Jump before Say → None; label with no content → None |
+| `TestMakeSeenFnExtended` | 10 | Multiple/two Say nodes → say_range; Show node excluded, Say survives; Show-only block → never; Show plain imspec → never; Show expr imspec → image descriptor (lower priority than Say); Scene then Say → say takes priority; Jump with no jump-follow → label; Jump with prior Say → say |
+| `TestEvalSeenFnSayRange` | 6 | say_range: first not in seen → False; first in seen, last not → False; both in seen → True; single-name shortcut; tuple keys both seen; tuple keys first absent |
+| `TestFindSceneSeenName` | 8 | Say node directly → name; Say after Python → name; hits Jump/Return/Menu before Say → None; runs out of nodes → None; max hops exceeded → None; None start → None |
+| `TestOptionSeen` | 4 | Persistent chosen → True; persistent chosen miss → False; no location → False; index out of range → False |
 
 ---
 
 ### `tests/test_ghost_logic.py`
 
-**What it tests:** Ghost card synthesis, branch notification tiers, and Python.execute filename filter.
+**What it tests:** Condition-variable extraction and prettification, region parsing for branch clustering, taken-branch resolution, if-run collection and partitioning, branch notification tiers, seen-fn caching, and ghost-node AST caching.
 
 **Run:** `pytest tests/test_ghost_logic.py -v`
 
 | Class | Tests | Covers |
 |-------|-------|--------|
+| `TestExtractVarsFromConditions` | 13 | Single/multiple equality vars, `and`-joined vars, True/False sentinels skipped, function calls excluded, uppercase excluded, bare truthy/not var, camel-case var, string-literal content not picked up, empty conditions, Ren'Py builtins excluded |
+| `TestPrettifyVar` | 7 | `mc_`/`flag_`/`is_`/`has_` prefix stripped, no prefix, single word, single-letter `mc_` var |
+| `TestPrettifyCondition` | 7 | True → "else", snake_case var prettified, string literal value unquoted (single/double), full condition format, keyword/uppercase not prettified |
+| `TestParseRegions` | 12 | Simple/numeric equality, `or` produces two regions, `and` merges region, non-equality operator/complex expression/True/else/empty/syntax-error → None, string/numeric comparator captured |
+| `TestExtractCompareLiterals` | 10 | Equality string/numeric literal, greater-than numeric, compound `and` extracts both, no compare node/malformed/True/else/empty → empty list, return type is list |
+| `TestShouldCluster` | 6 | Disjoint values same var clusters, overlapping values/no shared vars/no regions/unparseable/True sentinel → no cluster |
+| `TestGetTakenBranch` | 6 | First-entry True literal, first true condition wins, second entry taken when first false, all false/empty entries/eval exception → None |
+| `TestBranchExitsBeforeNext` | 5 | Jump/single-jump at end → True, return at end → True, non-exit node/empty block → False |
+| `TestCollectIfRun` | 6 | Single parseable if, chained parseable ifs, stops at non-if next, stops when payload is None, run payload has `ast_key` and affecting vars |
+| `TestPartitionIfRun` | 5 | Empty run, single payload one group, mutually exclusive payloads cluster, non-exclusive payloads split, all-branches-exit forces cluster |
 | `TestNotifyBranch` | 7 | All seen → suppress; pre_taken_seen=False → "New path"; taken seen + locked alt → icon-only ⎇; standalone if (taken_index=None) + locked branch → icon-only; standalone if, all seen → suppress; index-based comparison (equal tuples at different indices) correctly excludes only taken branch |
-| `TestPythonExecutePatched` | 4 | game/ file → diff called; mod file → diff bypassed; non-game/ file → diff bypassed; replaying=True → diff bypassed |
+| `TestSeenFnCache` | 8 | None block → never, not cached; result matches underlying fn; cache populated after first call; underlying fn called only once for same block; different blocks get separate entries; same block object returns cached value; empty block → never |
+| `TestGhostNodeCache` | 4 | AST cache written after emit, store dict has only slim fields, `_ghost_ast` returns correct data, second emit with same key does not overwrite |
 
 ---
 
 ### `tests/test_route_logic.py`
 
-**What it tests:** Route var formatting, diff accumulation, menu-snap flush, consumed check, and chip filtering/ordering.
+**What it tests:** Route var formatting, pending-change flush, menu-snap flush, consumed check, chip filtering/ordering, `Python.execute` filename filter, and AST-block walking.
 
 **Run:** `pytest tests/test_route_logic.py -v`
 
 | Class | Tests | Covers |
 |-------|-------|--------|
 | `TestFormatNumericChange` | 6 | Increase by 1 (no magnitude); increase by 3 (shows magnitude); decrease by 1; decrease by 2; integer delta strips `.0`; fractional delta preserved |
-| `TestDiffRouteVars` | 6 | Unchanged var not in pending; changed var added as `(old, new)`; already-pending var keeps original old, updates new; None in snap (init) skipped; changed var added to `_tl_recently_changed_vars`; unchanged var not in recently_changed |
-| `TestFlushMenuSnap` | 6 | No snap → no-op; init var (was None) → emits notification + adds to recently_changed; non-init var (was non-None) → skipped; numeric var → arrow format; snap cleared after flush |
+| `TestFlushVarChanges` | 7 | No pending → no-op; shows screen when enabled; no notification when flag disabled; clears pending when disabled and after flush; numeric/non-numeric var uses arrow format |
+| `TestFlushMenuSnap` | 7 | No snap → no-op; init var (was None) → emits notification + adds to recently_changed; non-init var (was non-None) → skipped; init var adds to recently_changed; numeric var → arrow format; snap cleared after flush; no notification when flag disabled |
 | `TestVarConsumed` | 5 | if_count 0 → False; seen below total → False; seen equals total → True; seen exceeds total → True; var not in if_count → False |
-| `TestBuildRouteChips` | 11 | if_count 0 → excluded; None value → excluded; list value → excluded; consumed + low count → excluded; consumed + high count → shown; unconsumed → shown; ghost var shown even if consumed; recently-changed shown even if consumed; ghost vars ordered before non-ghost; within group ordered by if_count desc; chip value matches store |
+| `TestBuildRouteChips` | 15 | if_count 0 → excluded; None/list value → excluded; consumed + at default → hidden; changed from default → shown; no default set → shown when assigned; ghost-highlighted or recently-changed at default → shown; assigned/ghost/recently-changed var always shown; ghost vars ordered before non-ghost; within-group ordered by if_count desc; chip value matches store; ghost highlighting reads affecting vars from cache |
+| `TestPythonExecutePatched` | 5 | game/ script (with and without `game/` prefix) → diff processing happens; mod file → bypassed; non-game/ file → bypassed; replaying=True → bypassed |
+| `TestWalkAstBlocks` | 8 | If node visited, Say inside If visited, Menu node visited, already-seen node not revisited, non-label nodes ignored, Ren'Py-internal label excluded, empty nodes list, multiple labels all visited |
 
 ---
 
 ### `tests/test_assets.py`
 
-**What it tests:** Node thumbnail retrieval priority and asset thumb cache key generation.
+**What it tests:** Node thumbnail retrieval priority, asset thumb cache key generation, ATL-expression asset resolution, and persistent-to-game thumb cache migration.
 
 **Run:** `pytest tests/test_assets.py -v`
 
@@ -741,18 +754,24 @@ RenPy stub, `.rpy` loader, and shared production namespace for all test files.
 |-------|-------|--------|
 | `TestNodeThumb` | 5 | `thumb_bytes` on node takes priority, falls back to persistent cache by `ast_key`, returns None when both missing, bytes preferred over cache, cache miss with key returns None |
 | `TestAssetThumbDisplayCacheKey` | 2 | Key includes img_name/width/height/fit_mode, defaults to 320×180 cover |
+| `TestResolveAssetFileATL` | 5 | Single-frame ATL resolves first image, multi-frame ATL resolves first image, non-loadable expression skipped, result is cached, plain image still resolves |
+| `TestThumbCacheMigration` | 6 | Migrates thumb cache and asset thumb cache from persistent, skips migration when persistent empty, merges into existing game cache, skips migration when attr absent, migration is idempotent |
 
 ---
 
 ### `tests/test_menu_location.py`
 
-**What it tests:** Menu site key derivation from history nodes.
+**What it tests:** Script-path normalization, and menu site key derivation from `namemap` lookups, `_location` tuples, and history nodes.
 
 **Run:** `pytest tests/test_menu_location.py -v`
 
 | Class | Tests | Covers |
 |-------|-------|--------|
-| `TestNodeMenuSiteKey` | 2 | Prefers `ast_key` tuple, falls back to `_location` file/line |
+| `TestNormalizeScriptPath` | 6 | Already-prefixed path unchanged, no-prefix path gets `game/` prefix, `.rpyc` suffix stripped, both prefix and `.rpyc`, bare filename with no slash unchanged, non-string returned as-is |
+| `TestMenuSiteKey` | 4 | Returns normalized tuple, already-prefixed path, missing file_path/line_no returns None |
+| `TestLocationMenuAstKey` | 2 | Non-tuple returns None, `namemap` miss returns None |
+| `TestLocationMenuSiteKey` | 3 | Falls back to `_location` file/line, short `_location` tuple returns None, non-tuple returns None |
+| `TestNodeMenuSiteKey` | 4 | Uses `ast_key`, falls back to `_location`, non-dict node returns None, no `ast_key` and no `_location` returns None |
 
 ---
 
@@ -774,7 +793,7 @@ RenPy stub, `.rpy` loader, and shared production namespace for all test files.
 
 ### `tests/test_cf_adapter.py`
 
-**What it tests:** `RenpyFlowGraph` control-flow graph: edge types, successors/predecessors, cycle detection, SCC computation. 55 tests.
+**What it tests:** `RenpyFlowGraph` control-flow graph: edge types, successors/predecessors, cycle detection, SCC computation. 78 tests.
 
 **Run:** `pytest tests/test_cf_adapter.py -v`
 
@@ -789,16 +808,55 @@ RenPy stub, `.rpy` loader, and shared production namespace for all test files.
 | `TestStringNext` | 2 | String `next` field resolves to label entry |
 | `TestCallReturn` | 4 | `call` to callee entry, `return` wired to post-call, no sequential after call |
 | `TestSimpleCycle` | 7 | Cycle header detection, back-edge marking, forward edges not marked, hub SCC membership |
-| `TestMultiLabelCycle` | 6 | Inter-label cycle, back-edge from arm back to hub, SCC contains arm statements, exit not in SCC |
+| `TestMultiLabelCycle` | 7 | Inter-label cycle, back-edge from arm back to hub, SCC contains arm statements, exit/end-label not in SCC, arm label entry |
 | `TestUserStatementHub` | 8 | `screen_jump` edge type, back-edges from both arms, hub SCC membership |
 | `TestNamedEmptyBlockLabel` | 4 | Empty label resolves through `next_label` chain; jumps to empty label reach menu |
-| `TestNestedIfInMenuArm` | 8 | If inside menu option, multi-path post-menu predecessors, `stmt_at` population |
+| `TestNestedIfInMenuArm` | 9 | If inside menu option, multi-path post-menu predecessors, `stmt_at` population |
 | `TestCallMultipleReturns` | 4 | Multiple return paths wired to same post-call |
-| `TestStmtAt` | 5 | All nids in `stmt_at`, types correct for all statement types |
+| `TestStmtAt` | 6 | All nids in `stmt_at`, types correct for all statement types |
 
 ---
 
-## RenPy In-Game Test Runner (`timeline_tests.rpy`)
+### `tests/test_ast_walk.py`
+
+**What it tests:** `_walk_ast_blocks` state threading and current-label tracking, and `_build_menu_scene_index` scene-before-menu bookkeeping.
+
+**Run:** `pytest tests/test_ast_walk.py -v`
+
+| Class | Tests | Covers |
+|-------|-------|--------|
+| `TestWalkAstBlocksStateful` | 6 | Initial state passed to first node, defaults to None, state threads sequentially through block, child block inherits state at branch point, branch state does not leak past the If, multiple If branches each inherit the same state |
+| `TestWalkAstBlocksCurrentLabel` | 4 | Visitor receives label name, two labels give correct names, If branch inherits label name, menu-option block inherits label name |
+| `TestBuildMenuSceneIndex` | 10 | Show before Menu recorded, no scene before Menu not recorded, scene updates between menus, Say between Show/Menu does not reset scene, scene in If branch does not leak to Menu after If, scene before If carries into Menu after If, Menu inside If branch gets branch scene, existing entry not overwritten, Ren'Py-internal label excluded, mod file excluded |
+
+---
+
+### `tests/test_coverage.py`
+
+**What it tests:** `_build_coverage_index` seen-descriptor accumulation per label.
+
+**Run:** `pytest tests/test_coverage.py -v`
+
+| Class | Tests | Covers |
+|-------|-------|--------|
+| `TestBuildCoverageIndex` | 12 | Single/two entries produce descriptors, descriptor is not `("never",)`/is a tuple, `("never",)` descriptor excluded, empty block skipped, no nodes produces empty, non-label nodes ignored, Ren'Py-internal/mod file excluded, nested If inside If block, multiple labels accumulate |
+
+---
+
+### `tests/test_snapshot_cache.py`
+
+**What it tests:** `_tl_make_cache` snapshot-cache construction and `_freeze_roots` reference-sharing behavior.
+
+**Run:** `pytest tests/test_snapshot_cache.py -v`
+
+| Class | Tests | Covers |
+|-------|-------|--------|
+| `TestMakeCache` | 4 | Returns `TLSnapshotCache` instance, menu/chapter are plain dict (not RevertableDict), menu/chapter start empty, `last_roots` starts None |
+| `TestFreezeRoots` | 6 | Immutable values shared by reference, unchanged mutable value reuses prior frozen copy, changed mutable value gets its own frozen copy, frozen copy never aliases the live object, new key not in prior snapshot gets frozen, first-ever capture has no prior snapshot |
+
+---
+
+## RenPy In-Game Test Runner (`timeline_tests_ren.py`)
 
 Tests RenPy-dependent behavior that cannot be run outside the engine.
 
@@ -806,41 +864,57 @@ Tests RenPy-dependent behavior that cannot be run outside the engine.
 
 **Output:** Written to `renpy-chronology-mod/debug.txt` via `_tl_log()`; in-game toast shows pass/fail count.
 
-**Suites (19 total):**
+**Suites (47 total):**
 
 | Suite | Tests | Covers |
 |-------|-------|--------|
-| `persistent` | 3 | Persistent state initialized as correct types |
-| `store_defaults` | 6 | Store variables exist with correct types |
+| `persistent` | 8 | Persistent and `renpy.game` state initialized as correct types; thumb caches empty after migration |
+| `store_defaults` | 8 | Store variables exist with correct types and initial values |
 | `hooks` | 3 | `exports.menu` and `store.menu` wrapped exactly once |
 | `save_slot` | 5 | Slot format, determinism, context/index sensitivity |
-| `thumbnail` | 4 | Returns bytes or None, valid PNG header, non-empty bytes |
-| `thumb_cache` | 4 | Write/read-back, eviction keeps at max, newest entries preserved |
-| `record_pipeline` | 10 | `_tl_record_before` → `_tl_record_after` full flow: node dict, options, index, context |
-| `node_has_new` | 3 | New content detection via `ChoiceReturn` (live and crash-safe fallback) |
-| `validate_history` | 3 | Malformed entries dropped, reindexed |
+| `thumbnail` | 5 | Returns bytes or None, valid PNG header, non-empty bytes, exceptions handled |
+| `thumb_cache` | 6 | Write/read-back, eviction keeps at max, newest entries preserved, oldest dropped |
+| `record_pipeline` | 13 | `_tl_record_before` → `_tl_record_after` full flow: node dict, options, index, context, `chosen_index`, `ghost_nodes` reset |
+| `locked_options` | 5 | Locked options excluded from a menu node's options; available options and count reflect only unlocked entries |
+| `option_filtering` | 9 | Menu option condition evaluation: bool/string conditions, unconditional entries, all-locked returns None, `block=None` prompt-vs-option distinction |
+| `node_has_new` | 5 | New content detection via `ChoiceReturn` (live and crash-safe fallback) |
+| `validate_history` | 4 | Malformed entries dropped, reindexed, exceptions handled |
+| `heal_restarting_screens` | 6 | Healing screens left in a restarting state after a jump: only stale screens are healed, `restart_interaction` called once, no-op when nothing is stale |
 | `chapter_store_defaults` | 3 | Chapter feature store variables exist with correct types |
-| `chapter_marker_dedup` | 4 | Duplicate marker at same position detected; different position not seen |
-| `label_jump_rollback` | 6 | Fallback rollback when chapter-end save missing: history/context/count trimmed, label_jump set |
+| `chapter_marker_dedup` | 5 | Duplicate marker at same position detected; different position not seen; exceptions handled |
 | `chap_end_slot_name` | 4 | Hashed format, prefix, context-sensitive, deterministic |
-| `shadow_path_defaults` | 2 | Shadow path store/persistent vars initialized |
-| `shadow_path_jump` | 6 | Shadow path staged correctly after jump: entries, location, chosen_index |
-| `shadow_path_empty_tail` | 1 | None when no nodes after target |
-| `shadow_path_consume` | 2 | `_shadow_orig_chosen` stamped on divergence; path trimmed |
-| `shadow_path_no_diverge` | 3 | No divergence flag when same choice made; path consumed to None |
-| `shadow_path_validate` | 3 | Corrupted shadow path reset to None; valid list and None preserved |
+| `shadow_path_defaults` | 1 | Shadow path store variable initialized to list or None |
+| `shadow_path_consume` | 3 | `_shadow_orig_chosen` stamped on divergence; path trimmed to tail; exceptions handled |
+| `shadow_path_no_diverge` | 4 | No divergence flag when the same choice is made; path consumed to None; exceptions handled |
+| `shadow_path_validate` | 4 | Corrupted shadow path reset to None; valid list and None preserved; exceptions handled |
+| `on_game_start` | 5 | `on_game_start` hook clears stale replay state and saves the initial `_ch_start` slot |
+| `on_load` | 6 | `on_load` hook: stale replay state cleared, menu-branch and chapter-branch shadow path staging |
+| `interact_callback_var_flush` | 4 | Interact callback flushes pending variable-change notifications when enabled, discards silently when disabled |
+| `log_truncation` | 8 | Rollback log truncation for save: full save preserved before truncation, log correctly restored after, truncated save smaller than full |
+| `snapshot_cache_save_round_trip` | 10 | Writes a real save via `renpy.save()` to a private slot, reads the file back with raw `zipfile`/`pickle` (never `renpy.load()`), and asserts: exactly one `TLSnapshotCache` survives, menu/chapter counts match the live cache, every snapshot has the roots/ctx/rollback_limit shape, and no object shared by reference across cached snapshots carries divergent content at different appearances |
+| `pre_save_slot` | 9 | Pre-save slot naming: hashed format, deterministic, distinct from post-choice slot, index/context sensitive |
+| `jump_uses_pre_save` | 5 | Jump-to-node uses the pre-save slot when available: `load_slot` set to the matching pre-save slot for the target index |
+| `cache_not_in_get_roots` | 9 | Snapshot cache lives on the log object, not inside roots; menu/chapter entries have valid roots, context, and resolvable labels |
+| `cache_transfer` | 4 | Snapshot cache transferred to a new `RollbackLog` on rollback: menu and chapter entries preserved |
+| `unfreeze_builds_rollback_log` | 10 | Unfreeze builds a valid `RollbackLog`/`Rollback` pair: field contract, `rollback_limit` legacy fallback, context copied not aliased |
+| `snapshot_ctx_isolation` | 6 | Repeated unfreeze calls on the same snapshot never share or mutate each other's decoded context |
+| `snapshot_roots_isolation` | 4 | Unfreeze returns a roots dict copy; mutating it never leaks back into the cached snapshot |
 | `snapshot_capture_isolation` | 5 | `_tl_capture_snapshot` isolation: a live-store mutation made after capture never leaks back into the cached snapshot's frozen roots |
-| `capture_snapshot_contract` | 8 | `_tl_capture_snapshot` returns exactly `{"roots", "ctx", "rollback_limit"}`; `ctx.interacting is False`; `rollback_limit` matches the live log at capture time |
+| `capture_snapshot_contract` | 9 | `_tl_capture_snapshot` returns exactly `{"roots", "ctx", "rollback_limit"}`; `ctx.interacting is False`; `rollback_limit` matches the live log at capture time |
 | `capture_snapshot_reuses_unchanged_values` | 6 | Two captures back to back: every value unchanged between them is the *same object* in both snapshots' roots; only the value that actually changed gets its own distinct frozen copy — the core reference-sharing contract |
 | `unfreeze_live_path` | 16 | `_tl_unfreeze_from_snapshot` on a live-shaped snap: full `Rollback`/`RollbackLog` field contract (`checkpoint`, `hard_checkpoint`, `stores={}`, `objects=[]`, `label="_after_load"`), decoded roots/ctx are copies not aliases of the snap's own values (which may themselves be shared with other cache entries) |
 | `unfreeze_live_repeat_isolation` | 5 | Unfreezing the same cached snap twice never cross-contaminates, even if the caller mutates what the first call returned |
 | `unfreeze_legacy_direct` | 14 | `_tl_unfreeze_legacy` (pre-blob deepcopy path) preserves its original behavior exactly, called directly; includes a hard-fail sub-test (a `threading.Lock()` value that cannot be deepcopied) asserting the exception propagates rather than falling back to a live/aliased reference |
 | `unfreeze_dispatch_routes_by_shape` | 4 | `_tl_unfreeze_from_snapshot` routes purely on shape — live-shaped snaps never touch `snap["context"]`, legacy-shaped snaps never touch a nonexistent `snap["ctx"]` |
-| `valid_snap_shapes` | 9 | `_valid_snap` (`tl_saveload.rpy`) accepts both the live shape and the legacy shape, rejects everything else — enumerated case by case |
+| `valid_snap_shapes` | 9 | `_valid_snap` (`tl_saveload_ren.py`) accepts both the live shape and the legacy shape, rejects everything else — enumerated case by case |
 | `snapshot_cache_mixed_shapes` | 8 | A cache holding both a legacy-shaped and a live-shaped entry at once (real post-upgrade state) retrieves and unfreezes both correctly through the public path, using `.menu`/`.chapter` attribute access |
-| `snapshot_cache_save_round_trip` | 10 | Writes a real save via `renpy.save()` to a private slot, reads the file back with raw `zipfile`/`pickle` (never `renpy.load()`), and asserts: exactly one `TLSnapshotCache` survives, menu/chapter counts match the live cache, every snapshot has the roots/ctx/rollback_limit shape, and no object shared by reference across cached snapshots carries divergent content at different appearances |
-
-> **Note:** the suite count/table above predates several suites already present in `timeline_tests.rpy` (`cache_transfer`, `unfreeze_builds_rollback_log`, `snapshot_ctx_isolation`, `snapshot_roots_isolation`, `jump_staging`, `jump_empty_shadow`, `cancel_jump`, `jump_chapter_staging`, `on_game_start`, `on_load`, `interact_callback_var_flush`, `log_truncation`, `pre_save_slot_format`, `jump_uses_pre_save`, `cache_not_in_get_roots`, `option_filtering`, `locked_options`, `ghost_gate_guards`, `ghost_on_if_execute`) — this table has been out of sync with the code for a while. Only the snapshot rows above were added/updated for the reference-sharing cache redesign; a full resync is a separate task.
+| `snapshot_no_live_aliasing` | 3 | No cached snapshot shares an object reference with live game state |
+| `jump_staging` | 7 | Jump staging sets the `replaying` flag, `replay_target`, `replay_path` with `ast_key` entries, and a recovery slot |
+| `jump_empty_shadow` | 2 | Jumping to the last node produces no shadow path entries |
+| `cancel_jump` | 6 | Canceling a jump clears all replay state and returns the recovery slot as the load slot |
+| `jump_chapter_staging` | 6 | Chapter-jump staging uses `replaying=False` as the shadow signal; `replay_path` entries all at or after the target index |
+| `ghost_gate_guards` | 6 | Ghost node emission is gated: blocked while replaying or skipping |
+| `ghost_on_if_execute` | 11 | Ghost node created and cached on If-branch execution: `ast_key`, `taken_index`, `branch_imgs`, `cluster_with_prev`, persistent cache entry |
 
 ---
 

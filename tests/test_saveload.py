@@ -1,5 +1,5 @@
 """
-Tests for tl_saveload.rpy — save slot, pre-save slot, find_pre_save, find_slot, validate history.
+Tests for tl_saveload_ren.py — save slot, pre-save slot, find_pre_save, find_slot, validate history.
 Run: pytest tests/test_saveload.py -v
 """
 import os, sys, tempfile

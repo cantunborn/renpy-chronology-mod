@@ -8,27 +8,27 @@ The mod is split across three layers:
 
 - **`timeline_*.rpy`** — top-level entry points: hooks, init, screen coordinator, save hooks, tests
 - **`backend/`** — `init -2 python:` modules; subsystem logic extracted from the monolithic init/hooks files
-- **`ui/`** — screen definitions only; no behavior logic
+- **`ui/`** — mostly screen definitions; behavior logic lives in `backend/`, though a few screens (e.g. `tl_card` in `ui/tl_cards.rpy`) still hold small `python:` blocks for display-only decisions
 
 ## Runtime Timeline Flow
 
 The timeline runtime starts with menu interception.
 
-`timeline_hooks.rpy` wraps `renpy.exports.menu` and `renpy.store.menu`. Before a menu is shown, `_tl_record_before()` evaluates each item's condition (`entry[1]`) to filter available options (prompt detected by `block is None`), then creates a history node with menu metadata, AST key, and thumbnail context, and captures a menu snapshot via `_tl_capture_snapshot`. After the player chooses an option, `_tl_record_after()` stores the chosen index and extends `_tl_context`.
+`timeline_hooks_ren.py` wraps `renpy.exports.menu` and `renpy.store.menu`. Before a menu is shown, `_tl_record_before()` evaluates each item's condition (`entry[1]`) to filter available options (prompt detected by `block is None`), then creates a history node with menu metadata, AST key, and thumbnail context, and captures a menu snapshot via `_tl_capture_snapshot`. After the player chooses an option, `_tl_record_after()` stores the chosen index and extends `_tl_context`.
 
-Chapter-end persistence hangs off the same runtime layer. `_tl_chapter_label_cb()` records chapter-end markers and captures a chapter snapshot via `_tl_capture_snapshot` / `_tl_cache_chapter_snapshot`. No `_ch_chap_*` saves are written for new sessions; existing chapter-end saves on disk remain loadable as fallback. Both callbacks are registered in `timeline_hooks.rpy`.
+Chapter-end persistence hangs off the same runtime layer. `_tl_chapter_label_cb()` records chapter-end markers and captures a chapter snapshot via `_tl_capture_snapshot` / `_tl_cache_chapter_snapshot`. No `_ch_chap_*` saves are written for new sessions; existing chapter-end saves on disk remain loadable as fallback. Both callbacks are registered in `timeline_hooks_ren.py`.
 
-`timeline_init.rpy` owns the top-level init: perf helpers, AST map build (`_tl_build_ast_map`), branch ID generation, and img-name migration. Subsystem helpers have been extracted to `backend/` (see Backend Modules below).
+`timeline_init_ren.py` owns the top-level init: perf helpers, AST map build (`_tl_build_ast_map`), branch ID generation, and img-name migration. Subsystem helpers have been extracted to `backend/` (see Backend Modules below).
 
-**Debug flags** (all `False` by default, set in `timeline_init.rpy`):
+**Debug flags** (all `False` by default, set in `timeline_init_ren.py`):
 
-- `TL_DEBUG_GHOST` — ghost synthesis detail (if-execute, clustering, branch-img tiers); gates ~12 high-volume logs in `tl_ghost_logic.rpy`
+- `TL_DEBUG_GHOST` — ghost synthesis detail (if-execute, clustering, branch-img tiers); gates ~12 high-volume logs in `tl_ghost_logic_ren.py`
 - `TL_DEBUG_SEEN` — seen-state resolution detail (opt_seen, peek_seen); gates per-option logs that fire O(options × cards) per timeline open
 - `TL_DEBUG_ROUTE` — route tracker detail (var diff per Python block, chip filter stats)
 - `TL_DEBUG_MENU` — per-menu pipeline detail (img_name resolution, thumbnail fallback)
 - `TL_DEBUG_ASSET` — thumbnail cache detail (hit/generated, scene map backfill, ast-walk misses)
 
-`timeline_save_hooks.rpy` validates and repairs loaded state, cleans transient UI state, and keeps older saves compatible.
+`timeline_save_hooks_ren.py` validates and repairs loaded state, cleans transient UI state, and keeps older saves compatible.
 
 `timeline_screen.rpy` is a thin coordinator. It sets up the main timeline screen and delegates card, ghost-card, and modal rendering to `ui/` (see UI Modules below).
 
@@ -36,7 +36,7 @@ Chapter-end persistence hangs off the same runtime layer. `_tl_chapter_label_cb(
 
 Each `backend/` file owns one subsystem. All run at `init -2 python:` so they are defined before the top-level hooks.
 
-### `backend/tl_snapshot_cache.rpy`
+### `backend/tl_snapshot_cache_ren.py`
 Snapshot capture, cache, and restore. A `TLSnapshotCache` instance lives on `renpy.game.log._tl_snapshot_cache` (outside `store`, so never in `get_roots()`), exposing `.menu`/`.chapter` dicts (not subscriptable on the cache object itself).
 
 Reference-sharing design: the cache owns exactly one frozen (deep-copied-once) reference for every distinct mutable value ever captured. `_freeze_roots(live_roots)` diffs each live value against the value frozen last capture via `_tl_values_equal(a, b)` (`a is b` fast path, else `pickle.dumps(a) == pickle.dumps(b)`, one generic comparator applied uniformly — no per-type assumptions about which vars mutate). Unchanged → reuse the prior frozen reference; changed/new → fresh `copy.deepcopy`. Unchanged values across many cached snapshots end up as the same object, so Ren'Py's own combined save pickle dedupes them via its memo table automatically.
@@ -52,7 +52,7 @@ Reference-sharing design: the cache owns exactly one frozen (deep-copied-once) r
 - `_tl_unfreeze_legacy(snap)` — pre-blob `{"roots", "context"}` snaps: deep-copies both (Ren'Py's real `unfreeze()` aliases roots into `store_dicts`, uncopied); deepcopy failures propagate rather than falling back to a live/aliased reference; no historical `rollback_limit` was ever captured, falls back to `renpy.config.hard_rollback_limit`
 - `_tl_unfreeze_from_snapshot(snap)` — dispatches on shape: `"context"` key present → legacy → `_tl_unfreeze_legacy()`; otherwise current live shape → deep-copy `roots`/`ctx` fresh (roots may still share frozen references with other cache entries). Both converge on `_tl_build_and_unfreeze`
 
-### `backend/tl_saveload.rpy`
+### `backend/tl_saveload_ren.py`
 Jump control: snapshot-primary, disk saves as backward-compat fallback. Only disk write is the recovery save.
 - `_tl_save_no_screenshot(slot)` — write a save with no screenshot and no dir-scan (`mutate_flag=False`); RenPy 7/8 compat
 - `_tl_pre_save_slot(node_index, context, ast_key=None)` — hashed slot name for pre-menu saves (`_pre_*`); hash includes `ast_key` for sandbox-game disambiguation
@@ -64,7 +64,7 @@ Jump control: snapshot-primary, disk saves as backward-compat fallback. Only dis
 - `_tl_cancel_jump()` — abort in-progress replay; snapshots thumbnails to `renpy.game._tl_thumb_cache`; loads recovery save
 - `_tl_clear_replay_state()` — zeroes all replay-related persistent vars
 
-### `backend/tl_assets.rpy`
+### `backend/tl_assets_ren.py`
 Thumbnail capture and asset resolution.
 - `_tl_capture_thumbnail()` — screenshot to bytes (WebP/JPEG/PNG)
 - `_tl_resolve_live_menu_img_name()` — derive current scene image from live Ren'Py state
@@ -75,17 +75,17 @@ Thumbnail capture and asset resolution.
 - `_tl_img_thumb_displayable(img_name, width, height, fit_mode)` — transient displayable cache for asset thumbs
 - `_tl_node_thumb(node)` — resolve the best displayable for a history node
 
-### `backend/tl_ast_utils.rpy`
+### `backend/tl_ast_utils_ren.py`
 
 Shared AST utilities. Loads before all other `tl_*.rpy` files (alphabetical `init -2` order).
 
 - `_tl_ast_literal_value(node)` — Python 2/3 compat literal extractor (`Constant`/`Str`/`Num`/bool `Name`)
 - `_tl_extract_compare_literals(cond_str)` — all comparator literals from a condition string
-- `_tl_walk_ast_blocks(nodes, visitor_fn)` — game-script-filtered iterative block walker; recurses into `If.entries` and `Menu.items`; calls `visitor_fn(node)` once per unique node
+- `_tl_walk_ast_blocks(nodes, visitor_fn, initial_state=None)` — game-script-filtered iterative block walker; recurses into `If.entries` and `Menu.items`; calls `visitor_fn(node, state, current_label)` once per unique node and threads the returned state sequentially through each block
 - `_tl_prettify_var(name)` — snake_case → readable label (strips common prefixes, title-cases)
 
-### `backend/tl_ghost_logic.rpy`
-Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` only. Route var change detection (`Python.execute` patch) lives in `tl_route_logic.rpy`.
+### `backend/tl_ghost_logic_ren.py`
+Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` only. Route var change detection (`Python.execute` patch) lives in `tl_route_logic_ren.py`.
 - `_tl_get_taken_branch(if_node)` — evaluate which branch index will be taken
 - `_tl_build_ghost_payload(if_node, taken_index, context_img)` — build one payload dict per sibling If
 - `_tl_collect_if_run(start_if_node)` — collect the full sequential sibling If run
@@ -96,7 +96,7 @@ Ghost card synthesis. Monkey-patches `renpy.ast.If.execute` only. Route var chan
 - `_tl_notify_branch(run, taken_index, pre_taken_seen)` — fire tiered branch notification (suppress / icon-only / new-path)
 - `_tl_on_screen_navigate(name)` — `config.statement_callbacks` handler; clears ghost nodes on `call screen` and `show screen` statements for sandbox location navigation
 
-### `backend/tl_seen_check.rpy`
+### `backend/tl_seen_check_ren.py`
 Seen-state helpers shared by ghost cards and the main timeline.
 - `_tl_say_seen_name(node)` — resolve the `_seen_ever` key for a Say node via the Ren'Py translator (for translated games)
 - `_tl_follow_jump_seen_name(target, max_hops)` — hop one level into a jump target to find the first Say seen name (for blocks ending in `jump label` with no prior Say)
@@ -105,7 +105,7 @@ Seen-state helpers shared by ghost cards and the main timeline.
 - `_tl_option_seen(node, option_index)` — check if a menu option has been seen
 - `_tl_option_peek_seen_fn(node, option_index)` — live AST peek for option seen state
 
-### `backend/tl_route_logic.rpy`
+### `backend/tl_route_logic_ren.py`
 Route tracker backend including `Python.execute` monkeypatch. Runs at `init -2`.
 - `_tl_build_route_index(nodes)` — full AST walk; writes `persistent._tl_route_var_names`, `_tl_var_if_count`, `_tl_if_key_to_vars`, `_tl_var_domain`, `_tl_var_is_numeric`; also writes `store._tl_route_var_set` (frozenset for O(1) co_names intersection)
 - `_tl_var_consumed(var_name)` — True if every If-entry referencing this var has been visited this session
@@ -115,46 +115,46 @@ Route tracker backend including `Python.execute` monkeypatch. Runs at `init -2`.
 - `_tl_format_numeric_change(label, old_val, new_val)` — format `↑N Label` / `↓N Label`; omits magnitude when delta is 1
 - `_tl_flush_menu_snap()` — emit notifications for vars first-assigned inside a menu arm (init case); checks flag internally
 
-### `backend/tl_shadow_path.rpy`
+### `backend/tl_shadow_path_ren.py`
 Shadow path / replay aid.
 - `_tl_shadow_match(shadow_path, node)` — check if current menu matches next shadow entry by `ast_key`
 - `_tl_consume_shadow_path(shadow_path, node, chosen_index)` — returns 3-tuple `(new_path, diverged_ci, match_mode)`; matches by `ast_key` with list→tuple coercion shim for old entries; stamps divergence when player chose differently
 
-### `backend/tl_chapter.rpy`
+### `backend/tl_chapter_ren.py`
 Chapter loading helpers.
 - `_tl_load_chapters()` — load chapter definitions from JSON
 - `_tl_dedup_chapters(raw)` — deduplicate chapter list
 - `_tl_chapter_marker_exists(markers, chapter, after_idx)` — check if a chapter-end marker exists
 - `_tl_rollback_timeline(history, context, markers, label, chapters)` — trim history to a chapter boundary
 
-### `backend/tl_menu_location.rpy`
+### `backend/tl_menu_location_ren.py`
 Menu site identity helpers.
 - `_tl_menu_site_key(file_path, line_no)` — stable string key for a menu AST site
 - `_tl_location_menu_ast_key(location)` — derive ast_key from a `_location` tuple
 - `_tl_node_menu_site_key(node)` — derive menu site key from a history node
 - `_tl_live_menu_lookup()` — look up current live menu in the AST
 
-### `backend/tl_menu_options.rpy`
+### `backend/tl_menu_options_ren.py`
 Choice entry and index helpers.
 - `_tl_valid_choice_entries(items)` — filter caption-only items, return choosable entries
 - `_tl_choice_entry_for_index(items, choice_index)` — resolve a choice index to its menu item
 - `_tl_choice_index_from_return_value(items, rv)` — map Ren'Py return value back to a choice index
 - `_tl_populate_choice_returns(node, items)` — populate `_choice_returns` on a history node
 
-### `backend/tl_coverage.rpy`
+### `backend/tl_coverage_ren.py`
 Coverage index: collect seen descriptors for all if-branch blocks in the AST.
 - `_tl_build_coverage_index(nodes)` — walks all label blocks; builds `persistent._tl_all_branch_descs` mapping ast_key → list of per-branch `seen_fn` descriptors. Called from `_tl_build_ast_map`.
 
-### `backend/tl_ast_dump.rpy`
+### `backend/tl_ast_dump_ren.py`
 Live AST → JSON dump for offline tools.
 - `_tl_cfg_dump_ast(labels, outfile)` — serialize the live Ren'Py AST to `cfg/full_ast.json`
 
 ## UI Modules
 
-Each `ui/` file contains screen definitions only. Behavior logic lives in `backend/`.
+Each `ui/` file contains screen definitions. Behavior logic mostly lives in `backend/`, but `ui/tl_cards.rpy`'s `tl_card` screen still has a `python:` block that picks the displayable to render (movie-vs-thumbnail tiering, fallback text).
 
 - `ui/tl_cards.rpy` — past card and current card screen definitions (extracted from `timeline_screen.rpy`)
-- `ui/tl_ghost_cards.rpy` — `tl_ghost_rows` screen definition; ghost card synthesis logic lives in `backend/tl_ghost_logic.rpy`
+- `ui/tl_ghost_cards.rpy` — `tl_ghost_rows` screen definition; ghost card synthesis logic lives in `backend/tl_ghost_logic_ren.py`
 - `ui/tl_route_screen.rpy` — route tracker chip bar (`tl_route` screen) and mod notification screen (`_tl_notify`)
 - `ui/tl_modal.rpy` — modal screen definition
 - `ui/tl_debug.rpy` — debug overlay screen
@@ -167,7 +167,7 @@ Timeline thumbnails are now on an asset-first path with screenshot fallback stil
 The current intended order is:
 
 1. `_tl_record_before()` creates the history node before the menu is shown.
-2. `_tl_resolve_live_menu_img_name()` (in `backend/tl_assets.rpy`) resolves the actual current gameplay image from live Ren'Py scene state.
+2. `_tl_resolve_live_menu_img_name()` (in `backend/tl_assets_ren.py`) resolves the actual current gameplay image from live Ren'Py scene state.
 3. If a runtime image is found, it is stamped onto the node as `img_name` and written into `persistent._tl_menu_scene_map` for that menu `ast_key`.
 4. If runtime capture misses, the persistent menu-scene map provides a backfill image for that menu site.
 5. Only if both asset-based paths miss does the system fall back to `_tl_capture_thumbnail()`.
@@ -211,7 +211,7 @@ Compatibility constraints:
 - on Ren'Py versions older than 7.5, `_tl_capture_thumbnail()` returns `None`
 - cards still work on those versions, but use a plain background instead of a captured scene image
 
-`_tl_thumb_displayable()` (in `backend/tl_assets.rpy`) detects WEBP / JPEG / PNG from magic bytes before creating the Ren'Py image object so cached thumbnails decode correctly across supported Ren'Py versions.
+`_tl_thumb_displayable()` (in `backend/tl_assets_ren.py`) detects WEBP / JPEG / PNG from magic bytes before creating the Ren'Py image object so cached thumbnails decode correctly across supported Ren'Py versions.
 
 ### Operational notes
 
@@ -224,13 +224,13 @@ Compatibility constraints:
 
 ## Replay Aid / Shadow Path Flow
 
-When a player jumps back to replay from an old menu, `_stage_menu_replay` (in `backend/tl_saveload.rpy`) records the full choice history as `persistent._tl_replay_path` entries — each with `{index, chosen_index, ast_key}`. After the jump load, `_tl_on_load` reconstructs `store._tl_shadow_path` from those entries: for a menu jump, entries with `index > target_index` become the shadow; for a chapter jump, all entries become shadow directly.
+When a player jumps back to replay from an old menu, `_stage_menu_replay` (in `backend/tl_saveload_ren.py`) records the full choice history as `persistent._tl_replay_path` entries — each with `{index, chosen_index, ast_key}`. After the jump load, `_tl_on_load` reconstructs `store._tl_shadow_path` from those entries: for a menu jump, entries with `index > target_index` become the shadow; for a chapter jump, all entries become shadow directly.
 
 As later menus are reached, `_tl_store_wrapper` calls `_tl_consume_shadow_path(shadow_path, node, chosen_index)`. It matches by `ast_key` (with list→tuple coercion for old entries). When a match is found and the player chose differently, `_shadow_orig_chosen` is stamped on the node so the UI can show divergence markers even after the shadow entry is consumed. The function returns a 3-tuple `(new_path, diverged_ci, match_mode)`.
 
 ## Ghost Card Flow
 
-Ghost cards are driven by a monkey-patch on `renpy.ast.If.execute` in `backend/tl_ghost_logic.rpy`.
+Ghost cards are driven by a monkey-patch on `renpy.ast.If.execute` in `backend/tl_ghost_logic_ren.py`.
 
 At `If.execute` time:
 
@@ -250,7 +250,7 @@ Rendering happens in `ui/tl_ghost_cards.rpy`. The UI flattens each cluster into 
 
 There are two related seen systems.
 
-For menu options and normal timeline dots, `_tl_option_seen()` (in `backend/tl_seen_check.rpy`) checks the AST-based seen-map and history.
+For menu options and normal timeline dots, `_tl_option_seen()` (in `backend/tl_seen_check_ren.py`) checks the AST-based seen-map and history.
 
 For ghost cards and condition/scene visibility, `_tl_make_seen_fn(block)` builds a picklable descriptor tuple for a branch block:
 
@@ -293,7 +293,7 @@ Domain tooltip is rendered at the top level as an absolute-positioned frame at `
 
 ## Var Change Notification Flow
 
-**Detection**: `_tl_python_execute_patched` (in `backend/tl_route_logic.rpy`) wraps `renpy.ast.Python.execute`. Only active for game script files (not `renpy/` internals, not mod files), and only when not replaying or skipping. Note: RenPy stores filenames relative to the `game/` directory, so game scripts never have a `game/` prefix — the filter excludes `renpy/` rather than requiring `game/`.
+**Detection**: `_tl_python_execute_patched` (in `backend/tl_route_logic_ren.py`) wraps `renpy.ast.Python.execute`. Only active for game script files (not `renpy/` internals, not mod files), and only when not replaying or skipping. Note: RenPy stores filenames relative to the `game/` directory, so game scripts never have a `game/` prefix — the filter excludes `renpy/` rather than requiring `game/`.
 
 1. Intersect `self.code.bytecode.co_names` with a frozenset of route var names (cached in a function-level default arg from `persistent._tl_route_var_names`; never a store var so rollback cannot clear it) → `_watch` (typically 0–5 vars)
 2. If `_watch` is empty or block is hide-mode → skip entirely, call original and return

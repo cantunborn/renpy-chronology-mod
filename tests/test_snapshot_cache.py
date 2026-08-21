@@ -1,11 +1,11 @@
 """
-Tests for tl_snapshot_cache.rpy — TLSnapshotCache class.
+Tests for tl_snapshot_cache_ren.py — TLSnapshotCache class.
 Run: pytest tests/test_snapshot_cache.py -v
 
 Only the engine-independent parts of the class (construction, the
 value-freeze/reuse decision) are covered here. capture()/unfreeze() need a
 real renpy.game.log / renpy.rollback environment and are covered by the
-in-game suite (timeline_tests.rpy) instead.
+in-game suite (timeline_tests_ren.py) instead.
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

@@ -1,5 +1,5 @@
 """
-Tests for tl_menu_options.rpy — choice entry identity, index resolution, and recording.
+Tests for tl_menu_options_ren.py — choice entry identity, index resolution, and recording.
 """
 import os
 import sys

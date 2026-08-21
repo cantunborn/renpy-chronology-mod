@@ -80,11 +80,11 @@ jobs:
             rm -rf staging
             mkdir -p "$MOD_DIR"
 
-            cp timeline_init.rpy \
-               timeline_hooks.rpy \
+            cp timeline_init_ren.py \
+               timeline_hooks_ren.py \
                timeline_screen.rpy \
-               timeline_save_hooks.rpy \
-               timeline_tests.rpy \
+               timeline_save_hooks_ren.py \
+               timeline_tests_ren.py \
                "$MOD_DIR/"
             cp -r fonts "$MOD_DIR/fonts"
             cp -r backend "$MOD_DIR/backend"

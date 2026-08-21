@@ -1,5 +1,5 @@
 """
-test_ast_walk.py — Unit tests for backend/tl_ast_utils.rpy.
+test_ast_walk.py — Unit tests for backend/tl_ast_utils_ren.py.
 
 Functions covered:
   _tl_walk_ast_blocks  (stateful signature: visitor_fn(node, state) -> state)

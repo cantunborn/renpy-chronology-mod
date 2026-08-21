@@ -1,5 +1,5 @@
 """
-Tests for tl_seen_check.rpy — node-has-new, eval seen fn, make_seen_fn,
+Tests for tl_seen_check_ren.py — node-has-new, eval seen fn, make_seen_fn,
 find_scene_seen_name, option_seen.
 Run: pytest tests/test_seen_check.py -v
 """

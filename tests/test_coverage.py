@@ -1,5 +1,5 @@
 """
-test_coverage.py — Unit tests for backend/tl_coverage.rpy.
+test_coverage.py — Unit tests for backend/tl_coverage_ren.py.
 
 Functions covered:
   _tl_build_coverage_index

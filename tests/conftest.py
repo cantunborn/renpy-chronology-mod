@@ -95,7 +95,7 @@ _renpy.screenshot_to_bytes = lambda *a, **kw: b""
 _renpy.loadable = lambda f: False
 _renpy.version_tuple = (8, 1, 3, 0, 0)
 
-# renpy.display sub-stub — enough for tl_assets.rpy to load
+# renpy.display sub-stub — enough for tl_assets_ren.py to load
 import threading as _threading
 _renpy.display = types.SimpleNamespace(
     im=types.SimpleNamespace(Data=None),
@@ -140,6 +140,12 @@ def load_rpy(rel_path, ns=None):
 
     abs_path = os.path.join(_root, rel_path)
     src = open(abs_path, encoding="utf-8").read()
+
+    if rel_path.endswith("_ren.py"):
+        # Already plain Python (the """renpy ... """ marker is an inert string
+        # statement) — exec the whole file directly, no extraction needed.
+        exec(compile(src, abs_path, "exec"), ns)
+        return ns
 
     # Match `init [±N] python:` blocks; capture indented body (including blank lines).
     pattern = re.compile(
@@ -253,7 +259,7 @@ _TLReturnNode      = Return
 _TLIfNode          = If
 _TLLabelNode       = Label
 
-# renpy.ast stub — must come after If is defined; used by tl_ghost_logic.rpy
+# renpy.ast stub — must come after If is defined; used by tl_ghost_logic_ren.py
 _renpy_ast_mod = types.ModuleType("renpy.ast")
 _renpy_ast_mod.If = If
 _renpy_ast_mod.Python = Python
@@ -267,23 +273,23 @@ sys.modules.setdefault("renpy.ast", _renpy_ast_mod)
 
 _rpy_ns = {}
 for _f in [
-    "backend/tl_ast_utils.rpy",
-    "backend/tl_chapter.rpy",
-    "backend/tl_menu_location.rpy",
-    "backend/tl_menu_options.rpy",
-    "backend/tl_shadow_path.rpy",
-    "backend/tl_seen_check.rpy",
-    "backend/tl_saveload.rpy",
-    "backend/tl_assets.rpy",
-    "backend/tl_ghost_logic.rpy",
-    "backend/tl_route_logic.rpy",
-    "backend/tl_coverage.rpy",
-    "backend/tl_snapshot_cache.rpy",
-    "timeline_init.rpy",
+    "backend/tl_ast_utils_ren.py",
+    "backend/tl_chapter_ren.py",
+    "backend/tl_menu_location_ren.py",
+    "backend/tl_menu_options_ren.py",
+    "backend/tl_shadow_path_ren.py",
+    "backend/tl_seen_check_ren.py",
+    "backend/tl_saveload_ren.py",
+    "backend/tl_assets_ren.py",
+    "backend/tl_ghost_logic_ren.py",
+    "backend/tl_route_logic_ren.py",
+    "backend/tl_coverage_ren.py",
+    "backend/tl_snapshot_cache_ren.py",
+    "timeline_init_ren.py",
 ]:
     load_rpy(_f, _rpy_ns)
 
-# Globals that timeline_init.rpy sets via `default` (not in init python: blocks)
+# Globals that timeline_init_ren.py sets via `default` (not in init python: blocks)
 _rpy_ns.setdefault("_tl_history", [])
 _rpy_ns.setdefault("_tl_context", [])
 _rpy_ns.setdefault("_tl_ghost_nodes", [])
@@ -293,7 +299,7 @@ _rpy_ns.setdefault("_tl_menu_var_snap", None)
 _rpy_ns.setdefault("_tl_var_if_seen_keys", {})
 _rpy_ns.setdefault("_tl_var_defaults", {})
 
-load_rpy("timeline_hooks.rpy", _rpy_ns)
+load_rpy("timeline_hooks_ren.py", _rpy_ns)
 
 
 # ---------------------------------------------------------------------------

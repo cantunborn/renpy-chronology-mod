@@ -55,7 +55,7 @@ screen tl_debug():
                 use tl_dbrow("node_count",  str(_tl_node_count))
                 use tl_dbrow("history len", str(len(_tl_history)))
                 use tl_dbrow("ast_ready",   str(_tl_ast_ready))
-                use tl_dbrow("ast_menus",   str(len(_tl_ast_map)))
+                use tl_dbrow("ast_menus",   str(len(_tl_live_menu_lookup())))
 
                 null ysize 4
                 if _tl_history:

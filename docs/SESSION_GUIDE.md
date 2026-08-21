@@ -18,25 +18,25 @@ This project is a Ren'Py chronology mod. It tracks player choices, builds a time
 The mod is split across three layers:
 
 **Top-level entry points (`timeline_*.rpy`)**
-- `timeline_init.rpy` — core state defaults, constants, logging, AST map build, branch ID, img-name migration, thumb cache load/save lifecycle
-- `timeline_hooks.rpy` — menu interception, save triggers, chapter-end hooks, option-condition extraction
+- `timeline_init_ren.py` — core state defaults, constants, logging, AST map build, branch ID, img-name migration, thumb cache load/save lifecycle
+- `timeline_hooks_ren.py` — menu interception, save triggers, chapter-end hooks, option-condition extraction
 - `timeline_screen.rpy` — thin coordinator; delegates card/ghost/modal rendering to `ui/`
-- `timeline_save_hooks.rpy` — post-load validation and save compatibility
-- `timeline_tests.rpy` — in-game test runner (Shift+F9)
+- `timeline_save_hooks_ren.py` — post-load validation and save compatibility
+- `timeline_tests_ren.py` — in-game test runner (Shift+F9)
 
 **Subsystem modules (`backend/`)** — all run at `init -2 python:`
-- `tl_saveload.rpy` — jump control: `_tl_jump`, `_tl_cancel_jump`, `_find_slot` (disk fallback), slot-naming helpers, recovery save write
-- `tl_snapshot_cache.rpy` — snapshot capture (`_tl_capture_snapshot`), cache on `renpy.game.log`, restore via `_tl_unfreeze_from_snapshot`
-- `tl_assets.rpy` — thumbnail capture, asset resolution, displayable creation, caching
-- `tl_ghost_logic.rpy` — ghost card synthesis; monkey-patches `renpy.ast.If.execute` and `Python.execute`
-- `tl_route_logic.rpy` — route tracker: AST index build, chip filtering/ordering, var change detection pipeline
-- `tl_seen_check.rpy` — seen-state tracking, descriptors, option-seen checks
-- `tl_shadow_path.rpy` — replay-aid shadow path: match and consume (3-tuple return); shadow entries transported via `persistent._tl_replay_path`
-- `tl_chapter.rpy` — chapter metadata loading, rollback
-- `tl_menu_location.rpy` — stable menu site identity keys
-- `tl_menu_options.rpy` — choice entry/index helpers
-- `tl_coverage.rpy` — coverage index: collect seen descriptors for all if-branch blocks
-- `tl_ast_dump.rpy` — live AST → JSON dump for offline tools
+- `tl_saveload_ren.py` — jump control: `_tl_jump`, `_tl_cancel_jump`, `_find_slot` (disk fallback), slot-naming helpers, recovery save write
+- `tl_snapshot_cache_ren.py` — snapshot capture (`_tl_capture_snapshot`), cache on `renpy.game.log`, restore via `_tl_unfreeze_from_snapshot`
+- `tl_assets_ren.py` — thumbnail capture, asset resolution, displayable creation, caching
+- `tl_ghost_logic_ren.py` — ghost card synthesis; monkey-patches `renpy.ast.If.execute` and `Python.execute`
+- `tl_route_logic_ren.py` — route tracker: AST index build, chip filtering/ordering, var change detection pipeline
+- `tl_seen_check_ren.py` — seen-state tracking, descriptors, option-seen checks
+- `tl_shadow_path_ren.py` — replay-aid shadow path: match and consume (3-tuple return); shadow entries transported via `persistent._tl_replay_path`
+- `tl_chapter_ren.py` — chapter metadata loading, rollback
+- `tl_menu_location_ren.py` — stable menu site identity keys
+- `tl_menu_options_ren.py` — choice entry/index helpers
+- `tl_coverage_ren.py` — coverage index: collect seen descriptors for all if-branch blocks
+- `tl_ast_dump_ren.py` — live AST → JSON dump for offline tools
 
 **UI screens (`ui/`)** — screen definitions only, no behavior logic
 - `tl_cards.rpy` — past and current choice card screens
@@ -57,38 +57,38 @@ Everything else in `tools/` (gen_cfg.py, causal_analysis.py, build_vis.py, etc.)
 ### Ghost cards
 
 - `docs/GHOST_CARDS.md`
-- `backend/tl_ghost_logic.rpy`
+- `backend/tl_ghost_logic_ren.py`
 - `ui/tl_ghost_cards.rpy`
 
 ### Route tracker / var change notifications
 
 - `docs/ROUTE_TRACKER.md`
-- `backend/tl_route_logic.rpy`
+- `backend/tl_route_logic_ren.py`
 - `ui/tl_route_screen.rpy`
 - `timeline_screen.rpy` (tab toggle, tooltip, `_tl_capture_hover_pos`)
 
 ### Jump back / replay aid / shadow path
 
 - `docs/JUMP.md`
-- `backend/tl_saveload.rpy`
-- `backend/tl_snapshot_cache.rpy`
-- `backend/tl_shadow_path.rpy`
-- `timeline_hooks.rpy`
+- `backend/tl_saveload_ren.py`
+- `backend/tl_snapshot_cache_ren.py`
+- `backend/tl_shadow_path_ren.py`
+- `timeline_hooks_ren.py`
 
 ### Thumbnails / asset images
 
-- `backend/tl_assets.rpy`
+- `backend/tl_assets_ren.py`
 - `docs/DEV_NOTES.md` (assets section)
 
 ### Seen state / unseen dots
 
-- `backend/tl_seen_check.rpy`
+- `backend/tl_seen_check_ren.py`
 - `docs/DEV_NOTES.md` (seen_check section)
 
 ### Chapter markers / jump to chapter
 
-- `backend/tl_chapter.rpy`
-- `timeline_hooks.rpy` (`_tl_chapter_label_cb`)
+- `backend/tl_chapter_ren.py`
+- `timeline_hooks_ren.py` (`_tl_chapter_label_cb`)
 - `game-chapters/*.json`
 
 ### Docs / recent changes

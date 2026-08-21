@@ -6,7 +6,7 @@ This document records every place the mod touches shared Ren'Py state: monkey-pa
 
 ### `renpy.ast.If.execute`
 
-**File:** `backend/tl_ghost_logic.rpy`
+**File:** `backend/tl_ghost_logic_ren.py`
 
 ```python
 _tl_orig_if_execute = _tl_renpy_ast.If.execute
@@ -27,7 +27,7 @@ _tl_renpy_ast.If.execute = _tl_if_execute_patched
 
 ### `renpy.ast.Python.execute`
 
-**File:** `backend/tl_route_logic.rpy`
+**File:** `backend/tl_route_logic_ren.py`
 
 ```python
 _tl_orig_python_execute = _tl_route_renpy_ast.Python.execute
@@ -55,7 +55,7 @@ _tl_route_renpy_ast.Python.execute = _tl_python_execute_patched
 
 ### `renpy.exports.menu` and `renpy.store.menu`
 
-**File:** `timeline_hooks.rpy`
+**File:** `timeline_hooks_ren.py`
 
 ```python
 _tl_orig_exports_menu = renpy.exports.menu
@@ -74,7 +74,7 @@ store.menu         = _tl_store_wrapper
 
 ### `config.skipping`
 
-**File:** `timeline_hooks.rpy` / `backend/tl_saveload.rpy`
+**File:** `timeline_hooks_ren.py` / `backend/tl_saveload_ren.py`
 
 Temporarily set to `True` during replay to enable fast-forward through the shadow path. Cleared after replay ends (`_tl_cancel_replay()` / load callback). This is the minimum intrusion needed for the replay feature — no alternative exists in the Ren'Py API.
 

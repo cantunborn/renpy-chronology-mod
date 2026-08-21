@@ -10,8 +10,8 @@ Ghost cards appear below the chip bar in the route screen, rendered as a grid. C
 
 ## Main Files
 
-- `backend/tl_ghost_logic.rpy` — runtime hook, clustering, payload builder, emission, branch notification
-- `backend/tl_seen_check.rpy` — seen descriptors (`_tl_make_seen_fn`, `_tl_eval_seen_fn`)
+- `backend/tl_ghost_logic_ren.py` — runtime hook, clustering, payload builder, emission, branch notification
+- `backend/tl_seen_check_ren.py` — seen descriptors (`_tl_make_seen_fn`, `_tl_eval_seen_fn`)
 - `ui/tl_ghost_cards.rpy` — `tl_ghost_rows` and `tl_ghost_card` screens
 - `ui/tl_cards.rpy` — `tl_thumbnail_frame` (shared with regular cards)
 - `ui/tl_route_screen.rpy` — renders ghost rows below the chip bar
@@ -81,7 +81,7 @@ The helper `_tl_ghost_ast(ast_key)` returns the cache entry or `{}`. All UI read
 
 ## Seen Logic
 
-Seen state uses descriptor tuples built by `_tl_make_seen_fn(block)` in `backend/tl_seen_check.rpy`. The descriptor is evaluated at render time via `_tl_eval_seen_fn`. Descriptor types:
+Seen state uses descriptor tuples built by `_tl_make_seen_fn(block)` in `backend/tl_seen_check_ren.py`. The descriptor is evaluated at render time via `_tl_eval_seen_fn`. Descriptor types:
 
 - `("say", name)` — single Say node key in `persistent._seen_ever`
 - `("say_range", first, last)` — fast-fail on first, confirm with last
@@ -118,8 +118,8 @@ The taken branch descriptor is evaluated **before** `If.execute` runs (pre-execu
 
 | Task | File |
 |------|------|
-| Runtime hook, clustering, payload build, emission | `backend/tl_ghost_logic.rpy` |
-| Seen descriptors, eval logic | `backend/tl_seen_check.rpy` |
+| Runtime hook, clustering, payload build, emission | `backend/tl_ghost_logic_ren.py` |
+| Seen descriptors, eval logic | `backend/tl_seen_check_ren.py` |
 | Ghost card UI screens (`tl_ghost_rows`, `tl_ghost_card`) | `ui/tl_ghost_cards.rpy` |
 | Thumbnail frame overlays (shared with regular cards) | `ui/tl_cards.rpy` |
 | Ghost rows render location (below chip bar) | `ui/tl_route_screen.rpy` |

@@ -1,5 +1,5 @@
 """
-test_ghost_logic.py — Unit tests for backend/tl_ghost_logic.rpy pure-logic functions.
+test_ghost_logic.py — Unit tests for backend/tl_ghost_logic_ren.py pure-logic functions.
 
 Functions covered:
   _tl_extract_vars_from_conditions

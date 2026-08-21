@@ -1,5 +1,5 @@
 """
-Tests for tl_menu_location.rpy — menu site key derivation.
+Tests for tl_menu_location_ren.py — menu site key derivation.
 Run: pytest tests/test_menu_location.py -v
 """
 import os
