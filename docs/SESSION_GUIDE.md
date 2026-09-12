@@ -37,6 +37,7 @@ The mod is split across three layers:
 - `tl_menu_options_ren.py` — choice entry/index helpers
 - `tl_coverage_ren.py` — coverage index: collect seen descriptors for all if-branch blocks
 - `tl_ast_dump_ren.py` — live AST → JSON dump for offline tools
+- `tl_ast_utils_ren.py` — shared AST helpers: literal parsing, block walk, game-file check, var-name prettify
 
 **UI screens (`ui/`)** — screen definitions only, no behavior logic
 - `tl_cards.rpy` — past and current choice card screens
@@ -49,6 +50,7 @@ The mod is split across three layers:
 ## Live Tooling
 
 - `tools/cf_adapter.py` — control-flow graph adapter (`RenpyFlowGraph` API); used with `cfg/full_ast.json`
+- `tools/experiments/` — active working scripts not yet folded into the main tool set
 
 Everything else in `tools/` (gen_cfg.py, causal_analysis.py, build_vis.py, etc.) is stashed and not in the working tree.
 

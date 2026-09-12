@@ -3,3 +3,8 @@
 .claude/
 **/__pycache__
 **/.pytest_cache
+typings/
+docs/Experiments/
+tools/experiments/
+pyrightconfig.json
+cfg/
