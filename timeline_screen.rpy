@@ -77,9 +77,10 @@ label _tl_do_chap_end_jump:
     elif _tl_chap_end_slot:
         $ _tl_log("TL do_chap_end_jump: dispatching load slot={}".format(_tl_chap_end_slot))
         $ renpy.load(_tl_chap_end_slot)
-    else:
+    elif _tl_label_jump:
         $ _tl_log("TL do_chap_end_jump: dispatching label jump={}".format(_tl_label_jump))
         $ renpy.jump(_tl_label_jump)
+    return
 
 
 ## =============================================================================

@@ -181,13 +181,15 @@ def _tl_make_cache():  # type: () -> TLSnapshotCache
     return TLSnapshotCache()
 
 def _tl_get_snapshot_cache():  # type: () -> TLSnapshotCache
-    if not hasattr(renpy.game.log, "_tl_snapshot_cache"):
+    cache = getattr(renpy.game.log, "_tl_snapshot_cache", None)
+    if not isinstance(cache, TLSnapshotCache):
         renpy.game.log._tl_snapshot_cache = _tl_make_cache()
     return renpy.game.log._tl_snapshot_cache
 
 def _tl_init_snapshot_cache():  # type: () -> None
     """Ensure cache exists on the loaded log. Called by _tl_on_load."""
-    if not hasattr(renpy.game.log, "_tl_snapshot_cache"):
+    cache = getattr(renpy.game.log, "_tl_snapshot_cache", None)
+    if not isinstance(cache, TLSnapshotCache):
         renpy.game.log._tl_snapshot_cache = _tl_make_cache()
 
 def _tl_capture_snapshot():  # type: () -> dict

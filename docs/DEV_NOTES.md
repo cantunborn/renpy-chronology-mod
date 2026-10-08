@@ -44,7 +44,7 @@ The cache is a **reference-sharing / persistent-data-structure** design: it owns
 | `get_menu` / `get_chapter` | `(self, key) → dict or None` | `self.menu.get(key)` / `self.chapter.get(key)`. |
 | `transfer_to` | `(self, new_log) → None` | Sets `new_log._tl_snapshot_cache = self`; called before `unfreeze()` so the cache survives the log replacement. |
 
-**Free-function wrappers** (`_tl_make_cache`, `_tl_get_snapshot_cache`, `_tl_init_snapshot_cache`, `_tl_capture_snapshot`, `_tl_cache_menu_snapshot`, `_tl_cache_chapter_snapshot`, `_tl_get_menu_snapshot`, `_tl_get_chapter_snapshot`, `_tl_transfer_snapshot_cache`) all delegate to the singleton instance at `renpy.game.log._tl_snapshot_cache` — no external caller's call signature changed when the cache moved from a dict to a class.
+**Free-function wrappers** (`_tl_make_cache`, `_tl_get_snapshot_cache`, `_tl_init_snapshot_cache`, `_tl_capture_snapshot`, `_tl_cache_menu_snapshot`, `_tl_cache_chapter_snapshot`, `_tl_get_menu_snapshot`, `_tl_get_chapter_snapshot`, `_tl_transfer_snapshot_cache`) all delegate to the singleton instance at `renpy.game.log._tl_snapshot_cache` — no external caller's call signature changed when the cache moved from a dict to a class. Both `_tl_get_snapshot_cache` and `_tl_init_snapshot_cache` guard with `isinstance(cache, TLSnapshotCache)` rather than `hasattr` — a stale `dict` (e.g. from rpyc-replacement deserialization where the class was unavailable at pickle time) is discarded and a fresh cache created in its place.
 
 **Restore-path functions:**
 
@@ -457,7 +457,7 @@ Main timeline screen coordinator, keybindings, and jump labels.
 | Label | Description |
 |-------|-------------|
 | `_tl_do_load` | Exits screen context and loads `_tl_load_slot` via `renpy.load`. |
-| `_tl_do_chap_end_jump` | Exits screen and loads `_tl_chap_end_slot` if set, otherwise jumps to `_tl_label_jump` (fallback for sessions without a chapter-end save). |
+| `_tl_do_chap_end_jump` | Exits screen and dispatches: snapshot unfreeze if `_tl_pending_snap` is set, else loads `_tl_chap_end_slot` if set, else jumps to `_tl_label_jump` if non-empty, else returns. `_tl_label_jump` is always `""` so the last branch is effectively dead but guarded to prevent `renpy.jump("")`. |
 
 **Screens:**
 

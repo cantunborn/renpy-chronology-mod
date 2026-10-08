@@ -46,7 +46,7 @@ Reference-sharing design: the cache owns exactly one frozen (deep-copied-once) r
 - `_tl_cache_chapter_snapshot(label_name, snap)` — write snap to `cache.chapter[label_name]`
 - `_tl_get_menu_snapshot(node_index)` — lookup
 - `_tl_get_chapter_snapshot(label_name)` — lookup
-- `_tl_init_snapshot_cache()` — ensure cache exists on current log (called by `_tl_on_load`)
+- `_tl_init_snapshot_cache()` — ensure cache exists on current log (called by `_tl_on_load`); uses `isinstance(cache, TLSnapshotCache)` guard so a stale `dict` from rpyc-replacement deserialization is replaced rather than passed through
 - `_tl_transfer_snapshot_cache(new_log)` — `TLSnapshotCache.transfer_to`: sets `new_log._tl_snapshot_cache = self` (called during unfreeze)
 - `_tl_build_and_unfreeze(roots, ctx, log_prefix, rollback_limit)` — shared tail of both unfreeze paths: force `ctx.interacting = False`; build synthetic single-entry `RollbackLog` with `rollback_limit` set to the value passed in (captured at snapshot time — `unfreeze()`'s internal `rollback()` decrements it by 1 consuming the entry, the same cost a real load pays, so this reproduces "made a save right here, then loaded it" rather than resetting rollback depth); copy cache to new log; call `unfreeze()` — atomically replaces live game state
 - `_tl_unfreeze_legacy(snap)` — pre-blob `{"roots", "context"}` snaps: deep-copies both (Ren'Py's real `unfreeze()` aliases roots into `store_dicts`, uncopied); deepcopy failures propagate rather than falling back to a live/aliased reference; no historical `rollback_limit` was ever captured, falls back to `renpy.config.hard_rollback_limit`

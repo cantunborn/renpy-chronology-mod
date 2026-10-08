@@ -7,6 +7,13 @@ that is present in the codebase but not yet committed.
 
 ## Unreleased
 
+### Fix: `ScriptError: could not find label ''` crash on chapter divider click after rpyc replacement
+
+Two bugs combined. When rpyc files are replaced, `TLSnapshotCache` is unavailable at pickle deserialization time, so `renpy.game.log._tl_snapshot_cache` comes back as a plain `dict`. `_tl_get_snapshot_cache()` and `_tl_init_snapshot_cache()` both used `hasattr`, passing the stale `dict` through silently. `_tl_get_chapter_snapshot()` then called `cache.get_chapter(label)` on that `dict`, raising `AttributeError`. `_tl_jump`'s outer `except` caught this and called `_tl_clear_replay_state()`, leaving `_tl_chap_end_slot` empty and `_tl_label_jump` still `""`. The dispatch label `_tl_do_chap_end_jump` had an unconditional `else:` branch that fired `renpy.jump(_tl_label_jump)` — `renpy.jump("")` → `ScriptError: could not find label ''`.
+
+- **`backend/tl_snapshot_cache_ren.py`** — replaced `hasattr` with `isinstance(cache, TLSnapshotCache)` in `_tl_get_snapshot_cache` and `_tl_init_snapshot_cache`; stale dicts are now discarded and a fresh cache is created in their place.
+- **`timeline_screen.rpy`** — changed `else:` to `elif _tl_label_jump:` in `_tl_do_chap_end_jump` and added an explicit `return`; the dead branch can no longer reach `renpy.jump("")`.
+
 ### Fix: `NameError: name 'Sized' is not defined` crash in the packaged mod's test runner
 
 `timeline_tests_ren.py` crashed at line 1238, inside `_tl_test_cache_not_in_get_roots`. The cause: `from collections.abc import Sized` sat above the file's first `"""renpy` marker. In the `_ren.py` format, code above the first marker is parse-only. Ren'Py never runs it. So `Sized` stayed undefined at runtime.
